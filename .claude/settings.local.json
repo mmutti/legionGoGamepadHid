@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip3 list:*)",
+      "Bash(python3 -c \"import evdev\")",
+      "Bash(python3 -c \"import uinput\")",
+      "Bash(apt-cache show:*)",
+      "Bash(grep -v \"^--$\")"
+    ]
+  }
+}
