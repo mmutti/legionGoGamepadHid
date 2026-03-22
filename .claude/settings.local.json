@@ -16,7 +16,13 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(gsettings get:*)",
+      "Bash(gsettings set:*)",
+      "Bash(gdbus call:*)",
+      "Bash(1 gdbus:*)",
+      "Bash(systemctl --user show-environment)",
+      "Bash(gdbus introspect:*)"
     ]
   }
 }
