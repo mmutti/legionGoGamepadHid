@@ -74,5 +74,7 @@ def test_save_config_round_trip(tmp_path, monkeypatch):
     cfg["btn_y"] = "key_esc"
     m.save_config(cfg)
     assert p.exists()
-    loaded = json.loads(p.read_text())
-    assert loaded["btn_y"] == "key_esc"
+    # Verify round-trip through load_config, not just raw JSON
+    reloaded = m.load_config()
+    assert reloaded["btn_y"] == "key_esc"
+    assert reloaded["left_stick"] == m.DEFAULT_CONFIG["left_stick"]
