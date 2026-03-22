@@ -310,6 +310,7 @@ def create_virtual_device():
         ecodes.EV_KEY: [
             ecodes.KEY_UP, ecodes.KEY_DOWN, ecodes.KEY_LEFT, ecodes.KEY_RIGHT,
             ecodes.BTN_LEFT, ecodes.BTN_RIGHT,
+            ecodes.KEY_Y, ecodes.KEY_ENTER, ecodes.KEY_ESC,
         ],
         ecodes.EV_REL: [
             ecodes.REL_X, ecodes.REL_Y,
@@ -742,37 +743,53 @@ class StickKeys:
 
 # ── Event processing ──────────────────────────────────────────────────────────
 
-def handle_event(event, state: State, ui: UInput, dpad: DpadKeys, pressed_keys: dict):
-    """Process a single evdev event."""
+def handle_event(event, state: State, ui: UInput, dpad: DpadKeys,
+                 ls_keys, rs_keys, cfg: dict):
+    """Process a single evdev event using the loaded config."""
 
     if event.type == ecodes.EV_ABS:
         code = event.code
-        if code in (ABS_LS_X, ABS_LS_Y, ABS_RS_X, ABS_RS_Y):
-            state.update_axis(code, event.value)
+        if code in (ABS_LS_X, ABS_LS_Y):
+            action = cfg["left_stick"]
+            if action == "mouse":
+                state.update_axis(code, event.value)
+            elif action == "arrow_keys" and ls_keys is not None:
+                ls_keys.update_axis(code, event.value)
+        elif code in (ABS_RS_X, ABS_RS_Y):
+            action = cfg["right_stick"]
+            if action == "mouse":
+                state.update_axis(code, event.value)
+            elif action == "arrow_keys" and rs_keys is not None:
+                rs_keys.update_axis(code, event.value)
         elif code in (ABS_DPAD_X, ABS_DPAD_Y):
-            dpad.update(code, event.value)
+            if cfg["dpad"] == "arrow_keys":
+                dpad.update(code, event.value)
 
     elif event.type == ecodes.EV_KEY:
-        code = event.code
-        val  = event.value  # 1=press, 0=release, 2=repeat
+        cfg_key = EVCODE_TO_CONFIG_KEY.get(event.code)
+        if cfg_key is None:
+            return
+        action = cfg.get(cfg_key, "none")
+        val    = event.value   # 0=release, 1=press, 2=repeat
+        if val == 2:
+            return   # ignore autorepeat
 
-        # Face buttons → arrow keys
-        if code in FACE_TO_ARROW:
-            key = FACE_TO_ARROW[code]
-            if val != 2:   # ignore autorepeat — let kernel handle it
-                ui.write(ecodes.EV_KEY, key, val)
-                ui.syn()
-
-        # Left side buttons → mouse clicks
-        elif code == MOUSE_LEFT_BTN:
-            if val != 2:
-                ui.write(ecodes.EV_KEY, ecodes.BTN_LEFT, val)
-                ui.syn()
-
-        elif code == MOUSE_RIGHT_BTN:
-            if val != 2:
-                ui.write(ecodes.EV_KEY, ecodes.BTN_RIGHT, val)
-                ui.syn()
+        if action == "mouse_left":
+            ui.write(ecodes.EV_KEY, ecodes.BTN_LEFT, val)
+            ui.syn()
+        elif action == "mouse_right":
+            ui.write(ecodes.EV_KEY, ecodes.BTN_RIGHT, val)
+            ui.syn()
+        elif action == "lock_screen":
+            if val == 1:
+                lock_screen()
+        elif action == "osk":
+            if val == 1:
+                toggle_osk()
+        elif action in ACTION_TO_EVKEY:
+            ui.write(ecodes.EV_KEY, ACTION_TO_EVKEY[action], val)
+            ui.syn()
+        # "none" or unrecognised: do nothing
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
