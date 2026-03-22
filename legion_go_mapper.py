@@ -750,19 +750,19 @@ def handle_event(event, state: State, ui: UInput, dpad: DpadKeys,
     if event.type == ecodes.EV_ABS:
         code = event.code
         if code in (ABS_LS_X, ABS_LS_Y):
-            action = cfg["left_stick"]
+            action = cfg.get("left_stick", "none")
             if action == "mouse":
                 state.update_axis(code, event.value)
             elif action == "arrow_keys" and ls_keys is not None:
                 ls_keys.update_axis(code, event.value)
         elif code in (ABS_RS_X, ABS_RS_Y):
-            action = cfg["right_stick"]
+            action = cfg.get("right_stick", "none")
             if action == "mouse":
                 state.update_axis(code, event.value)
             elif action == "arrow_keys" and rs_keys is not None:
                 rs_keys.update_axis(code, event.value)
         elif code in (ABS_DPAD_X, ABS_DPAD_Y):
-            if cfg["dpad"] == "arrow_keys":
+            if cfg.get("dpad", "none") == "arrow_keys":
                 dpad.update(code, event.value)
 
     elif event.type == ecodes.EV_KEY:
