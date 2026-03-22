@@ -546,27 +546,7 @@ def lock_screen():
 
 
 def toggle_osk():
-    """Toggle the on-screen keyboard.
-
-    Tries onboard (D-Bus) first — it has an immediate show/hide API.
-    Falls back to toggling the GNOME built-in OSK via gsettings (the
-    built-in OSK only appears when a text field is focused).
-    """
-    # Try onboard first (immediate, works on Wayland/X11)
-    try:
-        result = subprocess.run(
-            ["gdbus", "call", "--session",
-             "--dest", "org.onboard.Onboard",
-             "--object-path", "/org/onboard/Onboard/Keyboard",
-             "--method", "org.onboard.Onboard.Keyboard.ToggleVisible"],
-            capture_output=True, check=False,
-        )
-        if result.returncode == 0:
-            return
-    except OSError:
-        pass
-
-    # Fallback: GNOME built-in OSK via gsettings
+    """Toggle the GNOME on-screen keyboard via gsettings."""
     _KEY = "org.gnome.desktop.a11y.applications"
     _PROP = "screen-keyboard-enabled"
     try:
