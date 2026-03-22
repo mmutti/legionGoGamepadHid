@@ -109,8 +109,9 @@ BUTTON_ACTIONS = [
     ("mouse_left",   "Mouse left click"),
     ("mouse_right",  "Mouse right click"),
     ("key_y",        "Key: Y"),
-    ("key_return",   "Key: Return/Enter"),
-    ("key_esc",      "Key: Esc"),
+    ("key_return",     "Key: Return/Enter"),
+    ("key_esc",        "Key: Esc"),
+    ("key_backspace",  "Key: Backspace"),
 ]
 
 ACTIONS_FOR_TYPE = {
@@ -290,8 +291,9 @@ ACTION_TO_EVKEY = {
     "arrow_left":  ecodes.KEY_LEFT,
     "arrow_right": ecodes.KEY_RIGHT,
     "key_y":       ecodes.KEY_Y,
-    "key_return":  ecodes.KEY_ENTER,
-    "key_esc":     ecodes.KEY_ESC,
+    "key_return":    ecodes.KEY_ENTER,
+    "key_esc":       ecodes.KEY_ESC,
+    "key_backspace": ecodes.KEY_BACKSPACE,
 }
 
 # ── Legion Go HID constants (from hhd-dev/hhd) ─────────────────────────────────
@@ -310,7 +312,7 @@ def create_virtual_device():
         ecodes.EV_KEY: [
             ecodes.KEY_UP, ecodes.KEY_DOWN, ecodes.KEY_LEFT, ecodes.KEY_RIGHT,
             ecodes.BTN_LEFT, ecodes.BTN_RIGHT,
-            ecodes.KEY_Y, ecodes.KEY_ENTER, ecodes.KEY_ESC,
+            ecodes.KEY_Y, ecodes.KEY_ENTER, ecodes.KEY_ESC, ecodes.KEY_BACKSPACE,
         ],
         ecodes.EV_REL: [
             ecodes.REL_X, ecodes.REL_Y,
