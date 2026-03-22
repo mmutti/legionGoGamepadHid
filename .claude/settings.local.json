@@ -10,7 +10,13 @@
       "Bash(PYTHONPATH=/home/matteo/.local/lib/python3.13/site-packages python3 -c \"import ast, sys; ast.parse\\(open\\('legion_go_mapper.py'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
       "Bash(PYTHONPATH=/home/matteo/.local/lib/python3.13/site-packages python3 -c \"import ast; ast.parse\\(open\\('legion_go_mapper.py'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
       "Bash(gh api:*)",
-      "WebFetch(domain:api.github.com)"
+      "WebFetch(domain:api.github.com)",
+      "Bash(systemctl --user list-units --type=service)",
+      "Bash(pip install:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git:*)",
+      "Bash(python:*)"
     ]
   }
 }
