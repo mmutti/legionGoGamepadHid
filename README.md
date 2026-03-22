@@ -4,14 +4,18 @@ Maps the Legion Go built-in gamepad to mouse and keyboard input outside of Steam
 
 ## Button mapping
 
+All bindings are configurable via `--configure` (see below). Defaults:
+
 | Input | Output |
 |---|---|
 | Left thumbstick | Mouse cursor |
 | Right thumbstick | Mouse cursor (fallback — whichever stick has greater deflection wins) |
 | Y / A / X / B | ↑ / ↓ / ← / → arrow keys |
 | D-pad | ↑ / ↓ / ← / → arrow keys |
-| Upper left button (View/Back) | Left mouse click |
-| Lower left button (Select) | Right mouse click |
+| View/Back button | Left mouse click |
+| Menu/Start button | Right mouse click |
+| Legion L button | Lock screen |
+| Settings button | Lock screen |
 
 ## Requirements
 
@@ -41,6 +45,18 @@ The installer will:
 
 Removes the systemd service and udev rule. Does not remove `python3-evdev` or group membership.
 
+## Configuring button bindings
+
+Run the interactive configurator:
+
+```bash
+python3 legion_go_mapper.py --configure
+```
+
+Use the numbered menu to rebind any control. Press `s` to save and auto-restart the service, `q` to quit without saving.
+
+Config is stored at `~/.config/legion-go-mapper/config.json`.
+
 ## Useful commands
 
 ```bash
@@ -69,4 +85,4 @@ If a button does not behave as expected, run detect mode to see the raw event co
 python3 legion_go_mapper.py --detect
 ```
 
-Press each button and note the `code` values printed. Then update `MOUSE_LEFT_BTN` and `MOUSE_RIGHT_BTN` at the top of `legion_go_mapper.py` to match.
+Press each button and note the `code` values printed.
