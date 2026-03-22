@@ -128,3 +128,88 @@ def test_configure_makedirs_failure_returns_to_menu(tmp_path, monkeypatch, capsy
     assert "Error" in out or "error" in out
     # Menu re-displayed after the failed save (heading appears twice)
     assert out.count("Legion Go Gamepad") >= 2
+
+
+# ── StickKeys tests ───────────────────────────────────────────────────────────
+
+def make_mock_ui():
+    ui = mock.MagicMock()
+    ui.write = mock.MagicMock()
+    ui.syn  = mock.MagicMock()
+    return ui
+
+
+def test_stickkeys_no_output_inside_deadzone():
+    ui = make_mock_ui()
+    sk = m.StickKeys(ui, m.ABS_LS_X, m.ABS_LS_Y)
+    # deflection well below threshold (0.5 * 32767 ≈ 16383)
+    sk.update_axis(m.ABS_LS_X, 5000)
+    ui.write.assert_not_called()
+
+
+def test_stickkeys_right_key_on_threshold_cross():
+    ui = make_mock_ui()
+    sk = m.StickKeys(ui, m.ABS_LS_X, m.ABS_LS_Y)
+    # cross threshold to the right
+    sk.update_axis(m.ABS_LS_X, 20000)
+    ui.write.assert_called_once_with(evdev.ecodes.EV_KEY, evdev.ecodes.KEY_RIGHT, 1)
+    ui.syn.assert_called_once()
+
+
+def test_stickkeys_release_on_return_to_centre():
+    ui = make_mock_ui()
+    sk = m.StickKeys(ui, m.ABS_LS_X, m.ABS_LS_Y)
+    sk.update_axis(m.ABS_LS_X, 20000)   # press
+    ui.reset_mock()
+    sk.update_axis(m.ABS_LS_X, 1000)    # release
+    ui.write.assert_called_once_with(evdev.ecodes.EV_KEY, evdev.ecodes.KEY_RIGHT, 0)
+
+
+def test_stickkeys_diagonal_presses_two_keys():
+    ui = make_mock_ui()
+    sk = m.StickKeys(ui, m.ABS_LS_X, m.ABS_LS_Y)
+    sk.update_axis(m.ABS_LS_X, 20000)
+    sk.update_axis(m.ABS_LS_Y, -20000)
+    calls = ui.write.call_args_list
+    pressed_keys = {c.args[1] for c in calls if c.args[2] == 1}
+    assert evdev.ecodes.KEY_RIGHT in pressed_keys
+    assert evdev.ecodes.KEY_UP    in pressed_keys
+
+
+def test_stickkeys_ignores_wrong_axis():
+    ui = make_mock_ui()
+    sk = m.StickKeys(ui, m.ABS_LS_X, m.ABS_LS_Y)
+    sk.update_axis(m.ABS_RS_X, 30000)   # wrong axes
+    ui.write.assert_not_called()
+
+
+# ── toggle_osk tests ──────────────────────────────────────────────────────────
+
+def test_toggle_osk_enables_when_off(monkeypatch):
+    calls = []
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if cmd[0] == "gsettings" and cmd[1] == "get":
+            r = mock.MagicMock()
+            r.stdout = "false\n"
+            return r
+        return mock.MagicMock()
+    monkeypatch.setattr(m.subprocess, "run", fake_run)
+    m.toggle_osk()
+    set_call = next(c for c in calls if "set" in c)
+    assert set_call[-1] == "true"
+
+
+def test_toggle_osk_disables_when_on(monkeypatch):
+    calls = []
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if cmd[0] == "gsettings" and cmd[1] == "get":
+            r = mock.MagicMock()
+            r.stdout = "true\n"
+            return r
+        return mock.MagicMock()
+    monkeypatch.setattr(m.subprocess, "run", fake_run)
+    m.toggle_osk()
+    set_call = next(c for c in calls if "set" in c)
+    assert set_call[-1] == "false"

@@ -257,21 +257,6 @@ def _save_and_restart(cfg):
 
 # ── Button / axis assignments ──────────────────────────────────────────────────
 
-# Right face buttons → arrow keys (standard Xbox/South-facing layout)
-FACE_TO_ARROW = {
-    ecodes.BTN_Y: ecodes.KEY_UP,
-    ecodes.BTN_A: ecodes.KEY_DOWN,
-    ecodes.BTN_X: ecodes.KEY_LEFT,
-    ecodes.BTN_B: ecodes.KEY_RIGHT,
-}
-
-# Left-side buttons below D-pad → mouse buttons
-# BTN_SELECT = View/Back button (upper)
-# BTN_MODE   = Legion L / mode button (lower)
-# Run with --detect to confirm which physical buttons these are.
-MOUSE_LEFT_BTN  = ecodes.BTN_START    # upper button (code 315) → left click
-MOUSE_RIGHT_BTN = ecodes.BTN_SELECT   # lower button (code 314) → right click
-
 # Thumbstick axes
 ABS_LS_X = ecodes.ABS_X
 ABS_LS_Y = ecodes.ABS_Y
@@ -282,15 +267,30 @@ ABS_RS_Y = ecodes.ABS_RY
 ABS_DPAD_X = ecodes.ABS_HAT0X
 ABS_DPAD_Y = ecodes.ABS_HAT0Y
 
-# ── Lock-screen buttons ────────────────────────────────────────────────────────
-# The Legion L and Settings buttons live on the main 64-byte HID report
-# (report ID 0x74) sent by the Legion Go controller (Lenovo VID 0x17EF).
-# Byte 18 of each packet encodes them:
-#   bit 7 (0x80) = Legion L button
-#   bit 6 (0x40) = Settings / "…" button
-# The device is auto-detected by VID at runtime — no manual config needed.
-# Set False to disable this feature entirely.
-LOCK_BTN_ENABLED = True
+# Map evdev button code → config key
+EVCODE_TO_CONFIG_KEY = {
+    ecodes.BTN_Y:      "btn_y",
+    ecodes.BTN_A:      "btn_a",
+    ecodes.BTN_X:      "btn_x",
+    ecodes.BTN_B:      "btn_b",
+    ecodes.BTN_TL:     "btn_lb",
+    ecodes.BTN_TR:     "btn_rb",
+    ecodes.BTN_START:  "btn_view",
+    ecodes.BTN_SELECT: "btn_menu",
+    ecodes.BTN_THUMBL: "btn_l3",
+    ecodes.BTN_THUMBR: "btn_r3",
+}
+
+# Map action string → evdev key code (for keyboard actions)
+ACTION_TO_EVKEY = {
+    "arrow_up":    ecodes.KEY_UP,
+    "arrow_down":  ecodes.KEY_DOWN,
+    "arrow_left":  ecodes.KEY_LEFT,
+    "arrow_right": ecodes.KEY_RIGHT,
+    "key_y":       ecodes.KEY_Y,
+    "key_return":  ecodes.KEY_ENTER,
+    "key_esc":     ecodes.KEY_ESC,
+}
 
 # ── Legion Go HID constants (from hhd-dev/hhd) ─────────────────────────────────
 _LENOVO_VID        = 0x17EF
@@ -538,6 +538,24 @@ def lock_screen():
     subprocess.run(["loginctl", "lock-session"], check=False)
 
 
+def toggle_osk():
+    """Toggle the GNOME on-screen keyboard via gsettings."""
+    _KEY = "org.gnome.desktop.a11y.applications"
+    _PROP = "screen-keyboard-enabled"
+    try:
+        result = subprocess.run(
+            ["gsettings", "get", _KEY, _PROP],
+            capture_output=True, text=True, check=False,
+        )
+        current = result.stdout.strip() == "true"
+        subprocess.run(
+            ["gsettings", "set", _KEY, _PROP, "false" if current else "true"],
+            check=False,
+        )
+    except OSError:
+        pass
+
+
 def lock_hidraw_reader(stop_event: threading.Event):
     """
     Watch the Legion Go's main HID report for Legion L / Settings button presses
@@ -678,6 +696,42 @@ class DpadKeys:
         if pressed == was:
             return
         self.active[key] = pressed
+        self.ui.write(ecodes.EV_KEY, key, 1 if pressed else 0)
+        self.ui.syn()
+
+
+class StickKeys:
+    """Converts thumbstick deflection into directional key presses."""
+
+    THRESHOLD = 0.5
+
+    def __init__(self, ui: UInput, x_axis_code: int, y_axis_code: int):
+        self.ui = ui
+        self._x_axis = x_axis_code
+        self._y_axis = y_axis_code
+        self._x = 0.0
+        self._y = 0.0
+        self._active: dict[int, bool] = {}
+
+    def update_axis(self, code: int, raw_value: int):
+        norm = raw_value / AXIS_MAX
+        if code == self._x_axis:
+            self._x = norm
+        elif code == self._y_axis:
+            self._y = norm
+        else:
+            return
+        t = self.THRESHOLD
+        self._set(ecodes.KEY_LEFT,  self._x < -t)
+        self._set(ecodes.KEY_RIGHT, self._x >  t)
+        self._set(ecodes.KEY_UP,    self._y < -t)
+        self._set(ecodes.KEY_DOWN,  self._y >  t)
+
+    def _set(self, key: int, pressed: bool):
+        was = self._active.get(key, False)
+        if pressed == was:
+            return
+        self._active[key] = pressed
         self.ui.write(ecodes.EV_KEY, key, 1 if pressed else 0)
         self.ui.syn()
 
