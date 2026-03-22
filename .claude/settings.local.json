@@ -5,7 +5,12 @@
       "Bash(python3 -c \"import evdev\")",
       "Bash(python3 -c \"import uinput\")",
       "Bash(apt-cache show:*)",
-      "Bash(grep -v \"^--$\")"
+      "Bash(grep -v \"^--$\")",
+      "Bash(python3:*)",
+      "Bash(PYTHONPATH=/home/matteo/.local/lib/python3.13/site-packages python3 -c \"import ast, sys; ast.parse\\(open\\('legion_go_mapper.py'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
+      "Bash(PYTHONPATH=/home/matteo/.local/lib/python3.13/site-packages python3 -c \"import ast; ast.parse\\(open\\('legion_go_mapper.py'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
+      "Bash(gh api:*)",
+      "WebFetch(domain:api.github.com)"
     ]
   }
 }

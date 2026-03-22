@@ -8,10 +8,17 @@ Maps:
   Left D-pad                → arrow keys
   Left button above D-pad   → left mouse click  (BTN_SELECT by default)
   Left button below D-pad   → right mouse click (BTN_MODE   by default)
+  Legion L + Settings btns  → lock screen (loginctl lock-session, auto-detected)
 
 Usage:
-  python3 legion_go_mapper.py            # run mapper
-  python3 legion_go_mapper.py --detect   # print raw events to identify buttons
+  python3 legion_go_mapper.py               # run mapper
+  python3 legion_go_mapper.py --detect      # print raw events from gamepad
+  python3 legion_go_mapper.py --detect-all  # print raw events from ALL input
+                                            # devices (use this to find the
+                                            # Legion / Settings button codes)
+  python3 legion_go_mapper.py --watch-hidraw=/dev/hidrawN
+                                            # show raw packet changes on one
+                                            # hidraw device (diagnostic)
 
 Requirements:
   sudo apt install python3-evdev
@@ -23,6 +30,13 @@ Requirements:
   # Or add a udev rule (see setup instructions at bottom of this file)
 """
 
+import fcntl
+import glob
+import os
+import re
+import select
+import struct
+import subprocess
 import sys
 import time
 import math
@@ -76,6 +90,25 @@ ABS_RS_Y = ecodes.ABS_RY
 # D-pad hat axes
 ABS_DPAD_X = ecodes.ABS_HAT0X
 ABS_DPAD_Y = ecodes.ABS_HAT0Y
+
+# ── Lock-screen buttons ────────────────────────────────────────────────────────
+# The Legion L and Settings buttons live on the main 64-byte HID report
+# (report ID 0x74) sent by the Legion Go controller (Lenovo VID 0x17EF).
+# Byte 18 of each packet encodes them:
+#   bit 7 (0x80) = Legion L button
+#   bit 6 (0x40) = Settings / "…" button
+# The device is auto-detected by VID at runtime — no manual config needed.
+# Set False to disable this feature entirely.
+LOCK_BTN_ENABLED = True
+
+# ── Legion Go HID constants (from hhd-dev/hhd) ─────────────────────────────────
+_LENOVO_VID        = 0x17EF
+_LEGION_GO_PIDS    = {0x6182, 0x6183, 0x6184, 0x6185,   # original Legion Go
+                      0x61EB, 0x61EC, 0x61ED, 0x61EE}    # 2025 firmware variants
+_LEGION_REPORT_ID  = 0x74   # pkt[2] in a raw hidraw read
+_LEGION_BTN_BYTE   = 18     # byte index within the 64-byte report
+_LEGION_BTN_MASK   = 0xC0   # bit7=Legion L, bit6=Settings
+_HIDIOCGRAWINFO    = 0x80084803  # ioctl: get bus/VID/PID
 
 # ── Virtual output device ──────────────────────────────────────────────────────
 
@@ -146,6 +179,217 @@ def detect_mode(dev):
                     print(f"  ABS  value={event.value:+6d}  code={event.code:3d}  {name}")
     except KeyboardInterrupt:
         print("\nDone.")
+
+
+# ── Detect-all mode ───────────────────────────────────────────────────────────
+
+def _detect_device(path, key_names, abs_names):
+    """Read events from one device and print them; runs in its own thread."""
+    try:
+        dev = evdev.InputDevice(path)
+    except PermissionError:
+        print(f"  [SKIP — permission denied] {path}")
+        return
+    except OSError as e:
+        print(f"  [SKIP — {e}] {path}")
+        return
+    print(f"  [listening] {dev.path}  ({dev.name})")
+    try:
+        for event in dev.read_loop():
+            if event.type == ecodes.EV_KEY:
+                name  = key_names.get(event.code, f"0x{event.code:03x}")
+                state = {0: "released", 1: "pressed ", 2: "repeat  "}.get(event.value, str(event.value))
+                print(f"  [{dev.path}] ({dev.name})  KEY {state}  code={event.code:3d}  {name}")
+            elif event.type == ecodes.EV_ABS:
+                name = abs_names.get(event.code, f"0x{event.code:03x}")
+                if event.code in (ABS_DPAD_X, ABS_DPAD_Y):
+                    print(f"  [{dev.path}] ({dev.name})  ABS value={event.value:+6d}  code={event.code:3d}  {name}")
+    except OSError:
+        pass  # device disconnected
+
+
+def detect_all_mode():
+    """Listen on every accessible input device and print events."""
+    print("Scanning input devices…\n")
+
+    key_names = {}
+    for name, code in ecodes.ecodes.items():
+        if isinstance(code, int) and (name.startswith("KEY_") or name.startswith("BTN_")):
+            key_names.setdefault(code, name)
+    abs_names = {v: k for k, v in ecodes.ABS.items() if isinstance(v, int)}
+
+    threads = []
+    for path in evdev.list_devices():
+        t = threading.Thread(target=_detect_device, args=(path, key_names, abs_names), daemon=True)
+        t.start()
+        threads.append(t)
+
+    # Let threads print their open/skip status before the prompt
+    time.sleep(0.3)
+    print("\nPress buttons to identify them. Ctrl+C to stop.\n")
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nDone.")
+
+
+# ── Watch-hidraw diagnostic ───────────────────────────────────────────────────
+
+def watch_hidraw_mode(path):
+    """Print only packets that differ from the previous one. Ctrl+C to stop."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except (PermissionError, OSError) as e:
+        print(f"Cannot open {path}: {e}")
+        return
+    print(f"Watching {path} — only changed packets are printed.  Ctrl+C to stop.\n")
+    print("   t(s)   raw bytes (hex)")
+    t0   = time.monotonic()
+    prev = None
+    try:
+        while True:
+            ready, _, _ = select.select([fd], [], [], 0.5)
+            if not ready:
+                continue
+            try:
+                pkt = os.read(fd, 64)
+            except OSError:
+                break
+            if pkt != prev:
+                diff = ""
+                if prev is not None and len(pkt) == len(prev):
+                    # Mark bytes that changed with ▶
+                    parts = []
+                    for a, b in zip(prev, pkt):
+                        parts.append(f"\033[1m{b:02x}\033[0m" if a != b else f"{b:02x}")
+                    diff = " ".join(parts)
+                else:
+                    diff = pkt.hex(" ")
+                print(f"  {time.monotonic()-t0:6.2f}  {diff}")
+                prev = pkt
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+# ── Legion Go HID device discovery ────────────────────────────────────────────
+
+def find_legion_hidraw():
+    """
+    Return the path of the Legion Go's main HID interface, or None.
+
+    The controller exposes several hidraw nodes with the same VID/PID.  We open
+    all Lenovo ones simultaneously and return whichever first sends a 64-byte
+    packet with report ID 0x74 — the one that carries button state.
+    Falls back to the first VID match if none produce that report within 2 s.
+    """
+    # Collect all hidraw paths that belong to a Lenovo device
+    candidates = []   # list of (path, fd)
+    fallback   = None
+    for path in sorted(glob.glob("/dev/hidraw*")):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except (PermissionError, OSError):
+            continue
+        try:
+            raw = fcntl.ioctl(fd, _HIDIOCGRAWINFO, b'\x00' * 8)
+            _, vid, _ = struct.unpack('<IHH', raw)
+            if vid == _LENOVO_VID:
+                candidates.append((path, fd))
+                if fallback is None:
+                    fallback = path
+                continue   # keep fd open for sniffing
+        except OSError:
+            pass
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+    if not candidates:
+        return None
+
+    # Race: whichever candidate sends a 0x74 report first wins
+    fd_to_path = {fd: path for path, fd in candidates}
+    result   = None
+    deadline = time.monotonic() + 2.0
+    try:
+        while time.monotonic() < deadline and result is None:
+            remaining = max(0.0, deadline - time.monotonic())
+            ready, _, _ = select.select(list(fd_to_path), [], [], remaining)
+            for fd in ready:
+                try:
+                    pkt = os.read(fd, 64)
+                except OSError:
+                    continue
+                if len(pkt) >= 3 and pkt[2] == _LEGION_REPORT_ID:
+                    result = fd_to_path[fd]
+                    break
+    finally:
+        for fd in fd_to_path:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    return result or fallback
+
+
+# ── Screen lock ────────────────────────────────────────────────────────────────
+
+def lock_screen():
+    subprocess.run(["loginctl", "lock-session"], check=False)
+
+
+def lock_hidraw_reader(stop_event: threading.Event):
+    """
+    Watch the Legion Go's main HID report for Legion L / Settings button presses
+    and call lock_screen() on the rising edge of either button.
+
+    Button byte layout (byte 18 of the 64-byte report ID 0x74):
+      bit 7 (0x80) = Legion L button
+      bit 6 (0x40) = Settings / "…" button
+    """
+    path = find_legion_hidraw()
+    if path is None:
+        print("Lock-screen: Legion Go HID device not found — feature disabled.")
+        print("  Make sure the controller is connected and you have read access to /dev/hidraw*.")
+        return
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except (PermissionError, OSError) as e:
+        print(f"Lock-screen: cannot open {path}: {e}")
+        print("  Try adding a udev rule: KERNEL==\"hidraw*\", ATTRS{idVendor}==\"17ef\", MODE=\"0660\", GROUP=\"input\"")
+        return
+
+    print(f"Lock-screen: monitoring {path} (Legion L + Settings → loginctl lock-session)")
+    prev_btns = 0
+    try:
+        while not stop_event.is_set():
+            ready, _, _ = select.select([fd], [], [], 0.5)
+            if not ready:
+                continue
+            try:
+                pkt = os.read(fd, 64)
+            except OSError:
+                break
+            if len(pkt) < _LEGION_BTN_BYTE + 1 or pkt[2] != _LEGION_REPORT_ID:
+                continue
+            btns = pkt[_LEGION_BTN_BYTE] & _LEGION_BTN_MASK
+            if btns & ~prev_btns:   # rising edge: a button just became pressed
+                lock_screen()
+            prev_btns = btns
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 # ── Mapper state ───────────────────────────────────────────────────────────────
@@ -285,6 +529,15 @@ def handle_event(event, state: State, ui: UInput, dpad: DpadKeys, pressed_keys: 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    if "--detect-all" in sys.argv:
+        detect_all_mode()
+        return
+
+    watch_args = [a for a in sys.argv if a.startswith("--watch-hidraw=")]
+    if watch_args:
+        watch_hidraw_mode(watch_args[0].split("=", 1)[1])
+        return
+
     detect = "--detect" in sys.argv
 
     # Find gamepad
@@ -338,7 +591,7 @@ def main():
     print("  Y/A/X/B     → Up/Down/Left/Right arrows")
     print("  D-pad       → Up/Down/Left/Right arrows")
     print("  View btn    → Left mouse click")
-    print("  Legion L    → Right mouse click")
+    print("  Legion L / Settings → lock screen (loginctl lock-session)")
     print()
 
     state      = State()
@@ -348,6 +601,10 @@ def main():
 
     mover = threading.Thread(target=mouse_mover, args=(state, ui, stop_event), daemon=True)
     mover.start()
+
+    if LOCK_BTN_ENABLED:
+        locker = threading.Thread(target=lock_hidraw_reader, args=(stop_event,), daemon=True)
+        locker.start()
 
     try:
         for event in dev.read_loop():
