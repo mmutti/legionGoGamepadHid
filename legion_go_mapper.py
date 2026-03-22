@@ -32,8 +32,8 @@ Requirements:
 
 import fcntl
 import glob
+import json
 import os
-import re
 import select
 import struct
 import subprocess
@@ -63,6 +63,105 @@ POLL_HZ = 120
 
 # Axis ranges — standard Linux gamepad reports –32767 to 32767
 AXIS_MAX = 32767.0
+
+# ── Button configuration ───────────────────────────────────────────────────────
+
+CONFIG_PATH = os.path.expanduser("~/.config/legion-go-mapper/config.json")
+
+# All controls on the Legion Go and their type.
+# LT/RT are analog (ABS_Z/ABS_RZ) and are not configurable here.
+# Types: "axis" = thumbstick, "dpad" = hat switch,
+#        "button" = digital button, (legion/settings handled as "button" via HID)
+CONTROLS = [
+    ("left_stick",   "axis",   "Left thumbstick"),
+    ("right_stick",  "axis",   "Right thumbstick"),
+    ("dpad",         "dpad",   "D-pad"),
+    ("btn_y",        "button", "Y button"),
+    ("btn_a",        "button", "A button"),
+    ("btn_x",        "button", "X button"),
+    ("btn_b",        "button", "B button"),
+    ("btn_lb",       "button", "Left bumper (LB)"),
+    ("btn_rb",       "button", "Right bumper (RB)"),
+    ("btn_view",     "button", "View/Back button"),
+    ("btn_menu",     "button", "Menu/Start button"),
+    ("btn_l3",       "button", "L3 (left stick click)"),
+    ("btn_r3",       "button", "R3 (right stick click)"),
+    ("legion_btn",   "button", "Legion L button"),
+    ("settings_btn", "button", "Settings button"),
+]
+
+AXIS_ACTIONS = [
+    ("mouse",      "Mouse cursor"),
+    ("arrow_keys", "Arrow keys"),
+]
+
+DPAD_ACTIONS = [
+    ("arrow_keys", "Arrow keys"),
+]
+
+BUTTON_ACTIONS = [
+    ("lock_screen",  "Lock screen"),
+    ("osk",          "Toggle on-screen keyboard"),
+    ("arrow_up",     "Arrow key: Up"),
+    ("arrow_down",   "Arrow key: Down"),
+    ("arrow_left",   "Arrow key: Left"),
+    ("arrow_right",  "Arrow key: Right"),
+    ("mouse_left",   "Mouse left click"),
+    ("mouse_right",  "Mouse right click"),
+    ("key_y",        "Key: Y"),
+    ("key_return",   "Key: Return/Enter"),
+    ("key_esc",      "Key: Esc"),
+]
+
+ACTIONS_FOR_TYPE = {
+    "axis":   AXIS_ACTIONS,
+    "dpad":   DPAD_ACTIONS,
+    "button": BUTTON_ACTIONS,
+}
+
+# "none" is not in any action list (it is the "0. Disabled" option on the rebind screen),
+# but it must be in ACTION_LABELS so current bindings display correctly.
+ACTION_LABELS = {a: l for actions in ACTIONS_FOR_TYPE.values() for a, l in actions}
+ACTION_LABELS["none"] = "Disabled"
+
+DEFAULT_CONFIG = {
+    "left_stick":   "mouse",
+    "right_stick":  "mouse",
+    "dpad":         "arrow_keys",
+    "btn_y":        "arrow_up",
+    "btn_a":        "arrow_down",
+    "btn_x":        "arrow_left",
+    "btn_b":        "arrow_right",
+    "btn_lb":       "none",
+    "btn_rb":       "none",
+    "btn_view":     "mouse_left",
+    "btn_menu":     "mouse_right",
+    "btn_l3":       "none",
+    "btn_r3":       "none",
+    "legion_btn":   "lock_screen",
+    "settings_btn": "lock_screen",
+}
+
+
+def load_config():
+    """Load config from JSON, merging with DEFAULT_CONFIG for any missing keys."""
+    try:
+        with open(CONFIG_PATH) as f:
+            data = json.load(f)
+        cfg = dict(DEFAULT_CONFIG)
+        cfg.update(data)
+        return cfg
+    except (OSError, json.JSONDecodeError):
+        return dict(DEFAULT_CONFIG)
+
+
+def save_config(cfg):
+    """Write config to JSON, creating the directory if needed. Raises OSError on failure."""
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(cfg, f, indent=2)
+    print(f"Configuration saved to {CONFIG_PATH}")
+
 
 # ── Button / axis assignments ──────────────────────────────────────────────────
 
