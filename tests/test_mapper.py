@@ -117,10 +117,14 @@ def test_configure_invalid_input_reprompts(tmp_path, monkeypatch, capsys):
 
 
 def test_configure_makedirs_failure_returns_to_menu(tmp_path, monkeypatch, capsys):
-    # Simulate save_config raising OSError (e.g. permission denied)
+    # Simulate save_config raising OSError (e.g. permission denied).
+    # After the error the menu must re-display (not exit), so the user can
+    # retry or quit explicitly — verified by providing "q" after "s" fails.
     monkeypatch.setattr(m, "save_config", mock.MagicMock(side_effect=OSError("Permission denied")))
     inputs = iter(["s", "q"])
     monkeypatch.setattr("builtins.input", lambda _="": next(inputs))
     m.configure_mode()
     out = capsys.readouterr().out
     assert "Error" in out or "error" in out
+    # Menu re-displayed after the failed save (heading appears twice)
+    assert out.count("Legion Go Gamepad") >= 2

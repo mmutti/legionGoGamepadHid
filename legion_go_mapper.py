@@ -185,8 +185,9 @@ def configure_mode():
             return
 
         if choice == "s":
-            _save_and_restart(cfg)
-            return
+            if _save_and_restart(cfg):
+                return
+            continue
 
         try:
             idx = int(choice) - 1
@@ -230,13 +231,17 @@ def configure_mode():
 
 
 def _save_and_restart(cfg):
-    """Write config to disk via save_config() and restart the systemd service."""
+    """Write config to disk via save_config() and restart the systemd service.
+
+    Returns True on success (caller should exit the menu), False on save failure
+    (caller should stay in the menu so the user can retry or quit explicitly).
+    """
     try:
         save_config(cfg)   # handles makedirs + json write, prints confirmation
     except OSError as e:
         print(f"  {e}")
         print("  Error: could not save config.")
-        return
+        return False
 
     result = subprocess.run(
         ["systemctl", "--user", "restart", "legion-go-mapper"],
@@ -247,6 +252,7 @@ def _save_and_restart(cfg):
     else:
         print(result.stderr.strip())
         print("  Warning: could not restart service — run: systemctl --user restart legion-go-mapper")
+    return True
 
 
 # ── Button / axis assignments ──────────────────────────────────────────────────
