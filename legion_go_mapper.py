@@ -561,14 +561,14 @@ def toggle_osk():
         pass
 
 
-def lock_hidraw_reader(stop_event: threading.Event):
+def lock_hidraw_reader(stop_event: threading.Event, cfg: dict, ui: UInput):
     """
-    Watch the Legion Go's main HID report for Legion L / Settings button presses
-    and call lock_screen() on the rising edge of either button.
+    Watch the Legion Go HID report for Legion L / Settings button events.
+    Dispatches the configured action for each button on both press and release.
 
-    Button byte layout (byte 18 of the 64-byte report ID 0x74):
-      bit 7 (0x80) = Legion L button
-      bit 6 (0x40) = Settings / "…" button
+    Byte 18 of the 64-byte report ID 0x74:
+      bit 7 (0x80) = Legion L button   → cfg["legion_btn"]
+      bit 6 (0x40) = Settings button   → cfg["settings_btn"]
     """
     path = find_legion_hidraw()
     if path is None:
@@ -582,7 +582,12 @@ def lock_hidraw_reader(stop_event: threading.Event):
         print("  Try adding a udev rule: KERNEL==\"hidraw*\", ATTRS{idVendor}==\"17ef\", MODE=\"0660\", GROUP=\"input\"")
         return
 
-    print(f"Lock-screen: monitoring {path} (Legion L + Settings → loginctl lock-session)")
+    _HID_BTNS = (
+        (0x80, cfg.get("legion_btn",   "none")),
+        (0x40, cfg.get("settings_btn", "none")),
+    )
+
+    print(f"Lock-screen: monitoring {path} (Legion L + Settings)")
     prev_btns = 0
     try:
         while not stop_event.is_set():
@@ -596,8 +601,33 @@ def lock_hidraw_reader(stop_event: threading.Event):
             if len(pkt) < _LEGION_BTN_BYTE + 1 or pkt[2] != _LEGION_REPORT_ID:
                 continue
             btns = pkt[_LEGION_BTN_BYTE] & _LEGION_BTN_MASK
-            if btns & ~prev_btns:   # rising edge: a button just became pressed
-                lock_screen()
+            if btns == prev_btns:
+                prev_btns = btns
+                continue
+
+            for mask, action in _HID_BTNS:
+                rising  = bool(btns & mask) and not bool(prev_btns & mask)
+                falling = not bool(btns & mask) and bool(prev_btns & mask)
+                if not rising and not falling:
+                    continue
+                val = 1 if rising else 0
+
+                if action == "lock_screen":
+                    if rising:
+                        lock_screen()
+                elif action == "osk":
+                    if rising:
+                        toggle_osk()
+                elif action == "mouse_left":
+                    ui.write(ecodes.EV_KEY, ecodes.BTN_LEFT, val)
+                    ui.syn()
+                elif action == "mouse_right":
+                    ui.write(ecodes.EV_KEY, ecodes.BTN_RIGHT, val)
+                    ui.syn()
+                elif action in ACTION_TO_EVKEY:
+                    ui.write(ecodes.EV_KEY, ACTION_TO_EVKEY[action], val)
+                    ui.syn()
+
             prev_btns = btns
     finally:
         try:
@@ -804,6 +834,10 @@ def main():
         watch_hidraw_mode(watch_args[0].split("=", 1)[1])
         return
 
+    if "--configure" in sys.argv:
+        configure_mode()
+        return
+
     detect = "--detect" in sys.argv
 
     # Find gamepad
@@ -852,29 +886,34 @@ def main():
         dev.ungrab()
         sys.exit(1)
 
+    cfg = load_config()
+
+    ls_keys = (StickKeys(ui, ABS_LS_X, ABS_LS_Y)
+               if cfg["left_stick"] == "arrow_keys" else None)
+    rs_keys = (StickKeys(ui, ABS_RS_X, ABS_RS_Y)
+               if cfg["right_stick"] == "arrow_keys" else None)
+
     print("Mapper running. Ctrl+C to stop.")
     print(f"  Thumbsticks → mouse  (speed={MOUSE_SPEED} px/s, deadzone={DEADZONE})")
-    print("  Y/A/X/B     → Up/Down/Left/Right arrows")
-    print("  D-pad       → Up/Down/Left/Right arrows")
-    print("  View btn    → Left mouse click")
-    print("  Legion L / Settings → lock screen (loginctl lock-session)")
+    print("  Bindings loaded from config — run with --configure to change.")
     print()
 
     state      = State()
     dpad       = DpadKeys(ui)
-    pressed    = {}
     stop_event = threading.Event()
 
     mover = threading.Thread(target=mouse_mover, args=(state, ui, stop_event), daemon=True)
     mover.start()
 
-    if LOCK_BTN_ENABLED:
-        locker = threading.Thread(target=lock_hidraw_reader, args=(stop_event,), daemon=True)
+    if cfg.get("legion_btn", "none") != "none" or cfg.get("settings_btn", "none") != "none":
+        locker = threading.Thread(
+            target=lock_hidraw_reader, args=(stop_event, cfg, ui), daemon=True
+        )
         locker.start()
 
     try:
         for event in dev.read_loop():
-            handle_event(event, state, ui, dpad, pressed)
+            handle_event(event, state, ui, dpad, ls_keys, rs_keys, cfg)
     except KeyboardInterrupt:
         print("\nStopping.")
     finally:
