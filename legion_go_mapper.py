@@ -108,8 +108,8 @@ BUTTON_ACTIONS = [
     ("arrow_right",  "Arrow key: Right"),
     ("mouse_left",   "Mouse left click"),
     ("mouse_right",  "Mouse right click"),
-    ("key_return",   "Key: Return/Enter"),
     ("key_y",        "Key: Y"),
+    ("key_return",   "Key: Return/Enter"),
     ("key_esc",      "Key: Esc"),
 ]
 

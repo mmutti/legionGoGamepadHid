@@ -95,9 +95,9 @@ def test_configure_quit_no_save(tmp_path, monkeypatch, capsys):
 def test_configure_save_writes_json(tmp_path, monkeypatch, capsys):
     p = tmp_path / "cfg" / "config.json"
     monkeypatch.setattr(m, "CONFIG_PATH", str(p))
-    # Pick control 4 (btn_y), choose action 9 (key_return = index 8 in BUTTON_ACTIONS),
+    # Pick control 4 (btn_y), choose action 10 (key_return = index 9 in BUTTON_ACTIONS),
     # then save.  We skip the service restart by patching subprocess.run.
-    inputs = iter(["4", "9", "s"])
+    inputs = iter(["4", "10", "s"])
     monkeypatch.setattr("builtins.input", lambda _="": next(inputs))
     monkeypatch.setattr(m.subprocess, "run", lambda *a, **kw: mock.MagicMock(returncode=0))
     m.configure_mode()
