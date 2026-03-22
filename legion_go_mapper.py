@@ -602,7 +602,6 @@ def lock_hidraw_reader(stop_event: threading.Event, cfg: dict, ui: UInput):
                 continue
             btns = pkt[_LEGION_BTN_BYTE] & _LEGION_BTN_MASK
             if btns == prev_btns:
-                prev_btns = btns
                 continue
 
             for mask, action in _HID_BTNS:
