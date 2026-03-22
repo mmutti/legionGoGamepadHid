@@ -27,7 +27,7 @@ for name in ["BTN_Y","BTN_A","BTN_X","BTN_B","BTN_TL","BTN_TR",
              "BTN_START","BTN_SELECT","BTN_THUMBL","BTN_THUMBR",
              "BTN_LEFT","BTN_RIGHT",
              "KEY_UP","KEY_DOWN","KEY_LEFT","KEY_RIGHT",
-             "KEY_Y","KEY_ENTER","KEY_ESC","KEY_BACKSPACE"]:
+             "KEY_Y","KEY_ENTER","KEY_ESC","KEY_BACKSPACE","KEY_DELETE"]:
     setattr(evdev.ecodes, name, hash(name) % 1000)
 
 import importlib, legion_go_mapper as m

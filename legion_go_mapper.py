@@ -112,6 +112,7 @@ BUTTON_ACTIONS = [
     ("key_return",     "Key: Return/Enter"),
     ("key_esc",        "Key: Esc"),
     ("key_backspace",  "Key: Backspace"),
+    ("key_delete",     "Key: Delete"),
 ]
 
 ACTIONS_FOR_TYPE = {
@@ -294,6 +295,7 @@ ACTION_TO_EVKEY = {
     "key_return":    ecodes.KEY_ENTER,
     "key_esc":       ecodes.KEY_ESC,
     "key_backspace": ecodes.KEY_BACKSPACE,
+    "key_delete":    ecodes.KEY_DELETE,
 }
 
 # ── Legion Go HID constants (from hhd-dev/hhd) ─────────────────────────────────
@@ -312,7 +314,7 @@ def create_virtual_device():
         ecodes.EV_KEY: [
             ecodes.KEY_UP, ecodes.KEY_DOWN, ecodes.KEY_LEFT, ecodes.KEY_RIGHT,
             ecodes.BTN_LEFT, ecodes.BTN_RIGHT,
-            ecodes.KEY_Y, ecodes.KEY_ENTER, ecodes.KEY_ESC, ecodes.KEY_BACKSPACE,
+            ecodes.KEY_Y, ecodes.KEY_ENTER, ecodes.KEY_ESC, ecodes.KEY_BACKSPACE, ecodes.KEY_DELETE,
         ],
         ecodes.EV_REL: [
             ecodes.REL_X, ecodes.REL_Y,
@@ -544,7 +546,27 @@ def lock_screen():
 
 
 def toggle_osk():
-    """Toggle the GNOME on-screen keyboard via gsettings."""
+    """Toggle the on-screen keyboard.
+
+    Tries onboard (D-Bus) first — it has an immediate show/hide API.
+    Falls back to toggling the GNOME built-in OSK via gsettings (the
+    built-in OSK only appears when a text field is focused).
+    """
+    # Try onboard first (immediate, works on Wayland/X11)
+    try:
+        result = subprocess.run(
+            ["gdbus", "call", "--session",
+             "--dest", "org.onboard.Onboard",
+             "--object-path", "/org/onboard/Onboard/Keyboard",
+             "--method", "org.onboard.Onboard.Keyboard.ToggleVisible"],
+            capture_output=True, check=False,
+        )
+        if result.returncode == 0:
+            return
+    except OSError:
+        pass
+
+    # Fallback: GNOME built-in OSK via gsettings
     _KEY = "org.gnome.desktop.a11y.applications"
     _PROP = "screen-keyboard-enabled"
     try:
