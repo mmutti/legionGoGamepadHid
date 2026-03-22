@@ -281,7 +281,9 @@ EVCODE_TO_CONFIG_KEY = {
     ecodes.BTN_THUMBR: "btn_r3",
 }
 
-# Map action string → evdev key code (for keyboard actions)
+# Map action string → evdev key code (for keyboard actions only).
+# Non-key actions (mouse_left, mouse_right, lock_screen, osk) are dispatched
+# via explicit branches in handle_event() and lock_hidraw_reader().
 ACTION_TO_EVKEY = {
     "arrow_up":    ecodes.KEY_UP,
     "arrow_down":  ecodes.KEY_DOWN,
@@ -547,6 +549,8 @@ def toggle_osk():
             ["gsettings", "get", _KEY, _PROP],
             capture_output=True, text=True, check=False,
         )
+        if result.returncode != 0:
+            return
         current = result.stdout.strip() == "true"
         subprocess.run(
             ["gsettings", "set", _KEY, _PROP, "false" if current else "true"],
@@ -711,7 +715,7 @@ class StickKeys:
         self._y_axis = y_axis_code
         self._x = 0.0
         self._y = 0.0
-        self._active: dict[int, bool] = {}
+        self.active = {}   # key_code → bool
 
     def update_axis(self, code: int, raw_value: int):
         norm = raw_value / AXIS_MAX
@@ -727,11 +731,11 @@ class StickKeys:
         self._set(ecodes.KEY_UP,    self._y < -t)
         self._set(ecodes.KEY_DOWN,  self._y >  t)
 
-    def _set(self, key: int, pressed: bool):
-        was = self._active.get(key, False)
+    def _set(self, key, pressed):
+        was = self.active.get(key, False)
         if pressed == was:
             return
-        self._active[key] = pressed
+        self.active[key] = pressed
         self.ui.write(ecodes.EV_KEY, key, 1 if pressed else 0)
         self.ui.syn()
 

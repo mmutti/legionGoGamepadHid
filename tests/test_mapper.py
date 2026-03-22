@@ -163,6 +163,7 @@ def test_stickkeys_release_on_return_to_centre():
     ui.reset_mock()
     sk.update_axis(m.ABS_LS_X, 1000)    # release
     ui.write.assert_called_once_with(evdev.ecodes.EV_KEY, evdev.ecodes.KEY_RIGHT, 0)
+    ui.syn.assert_called_once()
 
 
 def test_stickkeys_diagonal_presses_two_keys():
@@ -191,6 +192,7 @@ def test_toggle_osk_enables_when_off(monkeypatch):
         calls.append(cmd)
         if cmd[0] == "gsettings" and cmd[1] == "get":
             r = mock.MagicMock()
+            r.returncode = 0
             r.stdout = "false\n"
             return r
         return mock.MagicMock()
@@ -206,6 +208,7 @@ def test_toggle_osk_disables_when_on(monkeypatch):
         calls.append(cmd)
         if cmd[0] == "gsettings" and cmd[1] == "get":
             r = mock.MagicMock()
+            r.returncode = 0
             r.stdout = "true\n"
             return r
         return mock.MagicMock()
