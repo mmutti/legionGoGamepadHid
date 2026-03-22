@@ -901,9 +901,13 @@ def main():
     dpad       = DpadKeys(ui)
     stop_event = threading.Event()
 
-    mover = threading.Thread(target=mouse_mover, args=(state, ui, stop_event), daemon=True)
-    mover.start()
+    if cfg.get("left_stick", "none") == "mouse" or cfg.get("right_stick", "none") == "mouse":
+        mover = threading.Thread(target=mouse_mover, args=(state, ui, stop_event), daemon=True)
+        mover.start()
+    else:
+        mover = None
 
+    locker = None
     if cfg.get("legion_btn", "none") != "none" or cfg.get("settings_btn", "none") != "none":
         locker = threading.Thread(
             target=lock_hidraw_reader, args=(stop_event, cfg, ui), daemon=True
@@ -917,7 +921,10 @@ def main():
         print("\nStopping.")
     finally:
         stop_event.set()
-        mover.join(timeout=1)
+        if mover is not None:
+            mover.join(timeout=1)
+        if locker is not None:
+            locker.join(timeout=1)
         try:
             dev.ungrab()
         except Exception:
