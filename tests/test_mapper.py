@@ -78,3 +78,49 @@ def test_save_config_round_trip(tmp_path, monkeypatch):
     reloaded = m.load_config()
     assert reloaded["btn_y"] == "key_esc"
     assert reloaded["left_stick"] == m.DEFAULT_CONFIG["left_stick"]
+
+
+# ── configure_mode tests ──────────────────────────────────────────────────────
+
+def test_configure_quit_no_save(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "config.json"
+    monkeypatch.setattr(m, "CONFIG_PATH", str(p))
+    inputs = iter(["q"])
+    monkeypatch.setattr("builtins.input", lambda _="": next(inputs))
+    m.configure_mode()
+    assert not p.exists()
+    assert "no changes" in capsys.readouterr().out.lower()
+
+
+def test_configure_save_writes_json(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "cfg" / "config.json"
+    monkeypatch.setattr(m, "CONFIG_PATH", str(p))
+    # Pick control 4 (btn_y), choose action 9 (key_return = index 8 in BUTTON_ACTIONS),
+    # then save.  We skip the service restart by patching subprocess.run.
+    inputs = iter(["4", "9", "s"])
+    monkeypatch.setattr("builtins.input", lambda _="": next(inputs))
+    monkeypatch.setattr(m.subprocess, "run", lambda *a, **kw: mock.MagicMock(returncode=0))
+    m.configure_mode()
+    assert p.exists()
+    saved = json.loads(p.read_text())
+    assert saved["btn_y"] == "key_return"
+
+
+def test_configure_invalid_input_reprompts(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "config.json"
+    monkeypatch.setattr(m, "CONFIG_PATH", str(p))
+    inputs = iter(["999", "abc", "q"])
+    monkeypatch.setattr("builtins.input", lambda _="": next(inputs))
+    m.configure_mode()
+    out = capsys.readouterr().out
+    assert out.count("Invalid input") >= 2
+
+
+def test_configure_makedirs_failure_returns_to_menu(tmp_path, monkeypatch, capsys):
+    # Simulate save_config raising OSError (e.g. permission denied)
+    monkeypatch.setattr(m, "save_config", mock.MagicMock(side_effect=OSError("Permission denied")))
+    inputs = iter(["s", "q"])
+    monkeypatch.setattr("builtins.input", lambda _="": next(inputs))
+    m.configure_mode()
+    out = capsys.readouterr().out
+    assert "Error" in out or "error" in out

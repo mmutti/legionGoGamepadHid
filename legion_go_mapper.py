@@ -108,8 +108,8 @@ BUTTON_ACTIONS = [
     ("arrow_right",  "Arrow key: Right"),
     ("mouse_left",   "Mouse left click"),
     ("mouse_right",  "Mouse right click"),
-    ("key_y",        "Key: Y"),
     ("key_return",   "Key: Return/Enter"),
+    ("key_y",        "Key: Y"),
     ("key_esc",      "Key: Esc"),
 ]
 
@@ -161,6 +161,92 @@ def save_config(cfg):
     with open(CONFIG_PATH, "w") as f:
         json.dump(cfg, f, indent=2)
     print(f"Configuration saved to {CONFIG_PATH}")
+
+
+def configure_mode():
+    """Interactive CLI to rebind all Legion Go controls."""
+    cfg = load_config()
+
+    while True:
+        print("\nLegion Go Gamepad — Button Configuration")
+        print("=" * 43)
+        print(f"Config: {CONFIG_PATH}\n")
+
+        for i, (key, ctype, name) in enumerate(CONTROLS, 1):
+            label = ACTION_LABELS.get(cfg.get(key, "none"), cfg.get(key, "none"))
+            print(f"  {i:2d}.  {name:<28}  [{label}]")
+
+        print("\n  s.  Save and restart service")
+        print("  q.  Quit without saving\n")
+        choice = input("Enter number to reconfigure, 's' to save, 'q' to quit: ").strip().lower()
+
+        if choice == "q":
+            print("Quit — no changes saved.")
+            return
+
+        if choice == "s":
+            _save_and_restart(cfg)
+            return
+
+        try:
+            idx = int(choice) - 1
+        except ValueError:
+            print("  Invalid input.")
+            continue
+
+        if not (0 <= idx < len(CONTROLS)):
+            print("  Invalid input.")
+            continue
+
+        key, ctype, name = CONTROLS[idx]
+        actions = ACTIONS_FOR_TYPE[ctype]
+
+        while True:
+            print(f"\n  {name} — choose action:")
+            for j, (akey, alabel) in enumerate(actions, 1):
+                marker = "  ← current" if cfg.get(key) == akey else ""
+                print(f"  {j:3d}. {alabel}{marker}")
+            print(f"    0. Disabled{('  ← current' if cfg.get(key) == 'none' else '')}")
+            achoice = input("\n  Enter number: ").strip()
+
+            if achoice == "0":
+                cfg[key] = "none"
+                print(f"  → {name} set to: Disabled")
+                break
+
+            try:
+                aidx = int(achoice) - 1
+            except ValueError:
+                print("  Invalid input.")
+                continue
+
+            if not (0 <= aidx < len(actions)):
+                print("  Invalid input.")
+                continue
+
+            cfg[key] = actions[aidx][0]
+            print(f"  → {name} set to: {actions[aidx][1]}")
+            break
+
+
+def _save_and_restart(cfg):
+    """Write config to disk via save_config() and restart the systemd service."""
+    try:
+        save_config(cfg)   # handles makedirs + json write, prints confirmation
+    except OSError as e:
+        print(f"  {e}")
+        print("  Error: could not save config.")
+        return
+
+    result = subprocess.run(
+        ["systemctl", "--user", "restart", "legion-go-mapper"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print("Service restarted.")
+    else:
+        print(result.stderr.strip())
+        print("  Warning: could not restart service — run: systemctl --user restart legion-go-mapper")
 
 
 # ── Button / axis assignments ──────────────────────────────────────────────────
