@@ -20,7 +20,8 @@ All bindings are configurable via `--configure` (see below). Defaults:
 ## Requirements
 
 - Debian (latest stable) with Python 3
-- `python3-evdev` (installed automatically by the install script)
+- `python3-evdev` and `python3-dbus` (installed automatically by the install script)
+- `iio-sensor-proxy` recommended for automatic orientation correction (usually pre-installed on GNOME)
 
 ## Install
 
@@ -65,6 +66,12 @@ journalctl --user -u legion-go-mapper -f   # live logs
 systemctl --user stop   legion-go-mapper   # stop temporarily
 systemctl --user start  legion-go-mapper   # start manually
 ```
+
+## Orientation
+
+When the Legion Go is held in portrait or upside-down orientation, the mouse cursor direction is corrected automatically. The mapper reads the device orientation from `iio-sensor-proxy` via D-Bus — the same service GNOME uses to auto-rotate the display — so no configuration is needed.
+
+If `python3-dbus` or `iio-sensor-proxy` is unavailable, a warning is printed at startup and the mapper falls back to landscape (normal) orientation.
 
 ## Tuning
 
