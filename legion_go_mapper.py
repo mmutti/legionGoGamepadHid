@@ -704,6 +704,74 @@ def rotate_for_orientation(x, y, orientation):
     return x, y  # "normal" or any unknown value
 
 
+# ── Orientation watcher (iio-sensor-proxy via D-Bus) ─────────────────────────
+
+_SENSOR_BUS_NAME  = "net.hadess.SensorProxy"
+_SENSOR_IFACE     = "net.hadess.SensorProxy"
+_SENSOR_OBJ_PATH  = "/net/hadess/SensorProxy"
+_PROPS_IFACE      = "org.freedesktop.DBus.Properties"
+_ORIENTATION_PROP = "AccelerometerOrientation"
+
+
+class OrientationWatcher:
+    """Tracks device orientation via iio-sensor-proxy and updates State.
+
+    Runs in a daemon thread.  If dbus or iio-sensor-proxy is unavailable,
+    __init__ logs a warning and returns without starting the thread.
+    """
+
+    def __init__(self, state):
+        self.state = state
+        try:
+            import dbus
+            import dbus.mainloop.glib
+
+            dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+            bus = dbus.SystemBus()
+            raw_proxy = bus.get_object(_SENSOR_BUS_NAME, _SENSOR_OBJ_PATH)
+            self._proxy = dbus.Interface(raw_proxy, _PROPS_IFACE)
+            self._bus   = bus
+
+            sensor_iface = dbus.Interface(raw_proxy, _SENSOR_IFACE)
+            sensor_iface.ClaimAccelerometer()
+        except (ImportError, TypeError):
+            print("[orientation] python3-dbus not available — orientation tracking disabled.")
+            return
+        except Exception as e:
+            print(f"[orientation] D-Bus setup failed ({e}) — orientation tracking disabled.")
+            return
+
+        t = threading.Thread(target=self._run, daemon=True)
+        t.start()
+
+    def _run(self):
+        try:
+            from gi.repository import GLib  # type: ignore
+
+            self._read_initial()
+            self._subscribe()
+
+            GLib.MainLoop().run()
+        except Exception as e:
+            print(f"[orientation] D-Bus watcher failed ({e}) — orientation tracking disabled.")
+
+    def _read_initial(self):
+        val = self._proxy.Get(_SENSOR_IFACE, _ORIENTATION_PROP)
+        self.state.set_orientation(str(val))
+
+    def _subscribe(self):
+        self._bus.add_signal_receiver(
+            self._on_properties_changed,
+            dbus_interface="org.freedesktop.DBus.Properties",
+            signal_name="PropertiesChanged",
+            path=_SENSOR_OBJ_PATH,
+        )
+
+    def _on_properties_changed(self, interface, changed, invalidated):
+        if _ORIENTATION_PROP in changed:
+            self.state.set_orientation(str(changed[_ORIENTATION_PROP]))
+
+
 # ── Mouse mover thread ────────────────────────────────────────────────────────
 
 def mouse_mover(state: State, ui: UInput, stop_event: threading.Event):

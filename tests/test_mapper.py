@@ -278,3 +278,58 @@ def test_state_set_orientation_is_threadsafe():
     # Lock is released, thread can now proceed
     t.join(timeout=1)
     assert results == ["left-up"]
+
+
+# ── OrientationWatcher tests ──────────────────────────────────────────────────
+
+def test_orientation_watcher_sets_initial_orientation(monkeypatch):
+    """Watcher reads initial orientation from proxy and updates State."""
+    s = m.State()
+    fake_proxy = mock.MagicMock()
+    fake_proxy.Get.return_value = "right-up"
+
+    fake_dbus = mock.MagicMock()
+    fake_iface = mock.MagicMock(return_value=fake_proxy)
+    fake_dbus.Interface = fake_iface
+    monkeypatch.setitem(sys.modules, "dbus", fake_dbus)
+    monkeypatch.setitem(sys.modules, "dbus.mainloop.glib", mock.MagicMock())
+
+    monkeypatch.setattr(m.OrientationWatcher, "_subscribe", lambda self: None)
+
+    w = m.OrientationWatcher(s)
+    w._read_initial()
+    assert s.orientation == "right-up"
+
+
+def test_orientation_watcher_updates_on_signal(monkeypatch):
+    """_on_properties_changed updates State.orientation."""
+    s = m.State()
+    w = m.OrientationWatcher.__new__(m.OrientationWatcher)
+    w.state = s
+    w._on_properties_changed(
+        "net.hadess.SensorProxy",
+        {"AccelerometerOrientation": "left-up"},
+        [],
+    )
+    assert s.orientation == "left-up"
+
+
+def test_orientation_watcher_ignores_irrelevant_signals(monkeypatch):
+    """_on_properties_changed ignores signals without AccelerometerOrientation."""
+    s = m.State()
+    s.set_orientation("right-up")
+    w = m.OrientationWatcher.__new__(m.OrientationWatcher)
+    w.state = s
+    w._on_properties_changed("net.hadess.SensorProxy", {"SomeOtherProp": "x"}, [])
+    assert s.orientation == "right-up"
+
+
+def test_orientation_watcher_missing_dbus_is_graceful(monkeypatch):
+    """If dbus import fails, OrientationWatcher.__init__ returns without crash."""
+    s = m.State()
+    monkeypatch.setitem(sys.modules, "dbus", None)
+    try:
+        w = m.OrientationWatcher(s)
+    except Exception as e:
+        pytest.fail(f"OrientationWatcher raised unexpectedly: {e}")
+    assert s.orientation == "normal"
