@@ -781,11 +781,11 @@ def mouse_mover(state: State, ui: UInput, stop_event: threading.Event):
     while not stop_event.is_set():
         t0 = time.monotonic()
 
-        raw_x, raw_y, mag = state.combined_mouse_vector()
+        raw_x, raw_y, _ = state.combined_mouse_vector()
         with state.lock:
             orientation = state.orientation
         rot_x, rot_y = rotate_for_orientation(raw_x, raw_y, orientation)
-        nx, ny = apply_deadzone_and_curve(rot_x, rot_y, mag)
+        nx, ny = apply_deadzone_and_curve(rot_x, rot_y, math.hypot(rot_x, rot_y))
 
         pixels_per_tick = MOUSE_SPEED * interval
         dx_f = nx * pixels_per_tick + remainder_x
