@@ -681,6 +681,24 @@ def apply_deadzone_and_curve(x, y, magnitude):
     return x * factor, y * factor
 
 
+def rotate_for_orientation(x, y, orientation):
+    """Rotate stick vector to match screen orientation.
+
+    iio-sensor-proxy orientation strings → 2×2 rotation applied to (x, y):
+      normal    → identity
+      right-up  → 90° CW:  (x, y) → ( y, -x)
+      left-up   → 90° CCW: (x, y) → (-y,  x)
+      bottom-up → 180°:    (x, y) → (-x, -y)
+    """
+    if orientation == "right-up":
+        return y, -x
+    if orientation == "left-up":
+        return -y, x
+    if orientation == "bottom-up":
+        return -x, -y
+    return x, y  # "normal" or any unknown value
+
+
 # ── Mouse mover thread ────────────────────────────────────────────────────────
 
 def mouse_mover(state: State, ui: UInput, stop_event: threading.Event):

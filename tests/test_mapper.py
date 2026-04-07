@@ -216,3 +216,35 @@ def test_toggle_osk_disables_when_on(monkeypatch):
     m.toggle_osk()
     set_call = next(c for c in calls if "set" in c)
     assert set_call[-1] == "false"
+
+
+# ── rotate_for_orientation tests ──────────────────────────────────────────────
+
+def test_rotate_normal_is_identity():
+    assert m.rotate_for_orientation(1.0, 0.5, "normal") == (1.0, 0.5)
+
+def test_rotate_right_up():
+    # 90° CW: (x, y) → (y, -x)
+    x, y = m.rotate_for_orientation(1.0, 0.0, "right-up")
+    assert abs(x - 0.0) < 1e-9
+    assert abs(y - (-1.0)) < 1e-9
+
+def test_rotate_left_up():
+    # 90° CCW: (x, y) → (-y, x)
+    x, y = m.rotate_for_orientation(1.0, 0.0, "left-up")
+    assert abs(x - 0.0) < 1e-9
+    assert abs(y - 1.0) < 1e-9
+
+def test_rotate_bottom_up():
+    # 180°: (x, y) → (-x, -y)
+    x, y = m.rotate_for_orientation(1.0, 0.5, "bottom-up")
+    assert abs(x - (-1.0)) < 1e-9
+    assert abs(y - (-0.5)) < 1e-9
+
+def test_rotate_unknown_orientation_falls_back_to_normal():
+    assert m.rotate_for_orientation(1.0, 0.5, "unknown-value") == (1.0, 0.5)
+
+def test_rotate_preserves_magnitude():
+    import math
+    x, y = m.rotate_for_orientation(0.6, 0.8, "right-up")
+    assert abs(math.hypot(x, y) - 1.0) < 1e-9
