@@ -248,3 +248,33 @@ def test_rotate_preserves_magnitude():
     import math
     x, y = m.rotate_for_orientation(0.6, 0.8, "right-up")
     assert abs(math.hypot(x, y) - 1.0) < 1e-9
+
+
+# ── State.orientation tests ───────────────────────────────────────────────────
+
+def test_state_orientation_defaults_to_normal():
+    s = m.State()
+    assert s.orientation == "normal"
+
+def test_state_set_orientation():
+    s = m.State()
+    s.set_orientation("right-up")
+    assert s.orientation == "right-up"
+
+def test_state_set_orientation_is_threadsafe():
+    """set_orientation acquires the lock (smoke test — not a race detector)."""
+    import threading
+    s = m.State()
+    results = []
+    def setter():
+        s.set_orientation("left-up")
+        results.append(s.orientation)
+
+    with s.lock:
+        t = threading.Thread(target=setter)
+        t.start()
+        # Thread is now blocked waiting for the lock
+
+    # Lock is released, thread can now proceed
+    t.join(timeout=1)
+    assert results == ["left-up"]

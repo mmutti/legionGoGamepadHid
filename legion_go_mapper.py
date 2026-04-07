@@ -647,6 +647,7 @@ class State:
         self.ls_y = 0.0
         self.rs_x = 0.0   # right stick X
         self.rs_y = 0.0
+        self.orientation = "normal"
         self.lock = threading.Lock()
 
     def update_axis(self, code, raw_value):
@@ -656,6 +657,10 @@ class State:
             elif code == ABS_LS_Y: self.ls_y = norm
             elif code == ABS_RS_X: self.rs_x = norm
             elif code == ABS_RS_Y: self.rs_y = norm
+
+    def set_orientation(self, orientation):
+        with self.lock:
+            self.orientation = orientation
 
     def combined_mouse_vector(self):
         """Return (dx, dy) combining both sticks — whichever has larger magnitude wins."""
