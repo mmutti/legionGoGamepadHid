@@ -22,6 +22,14 @@ else
     echo "      OK"
 fi
 
+echo "      Checking python3-dbus..."
+if ! "$PYTHON" -c "import dbus" 2>/dev/null; then
+    echo "      Installing python3-dbus via apt..."
+    sudo apt-get install -y python3-dbus
+else
+    echo "      OK"
+fi
+
 # ── 2. uinput kernel module ────────────────────────────────────────────────────
 echo "[2/4] Configuring uinput kernel module..."
 if ! lsmod | grep -q uinput; then
