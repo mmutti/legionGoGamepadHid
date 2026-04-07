@@ -996,6 +996,7 @@ def main():
     print()
 
     state      = State()
+    OrientationWatcher(state)
     dpad       = DpadKeys(ui)
     stop_event = threading.Event()
 
