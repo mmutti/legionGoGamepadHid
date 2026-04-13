@@ -16,6 +16,9 @@ Usage:
   python3 legion_go_mapper.py --detect-all  # print raw events from ALL input
                                             # devices (use this to find the
                                             # Legion / Settings button codes)
+  python3 legion_go_mapper.py --detect-hid  # auto-find Legion hidraw device and
+                                            # show a byte-diff view — press a
+                                            # button to see which byte/bit changes
   python3 legion_go_mapper.py --watch-hidraw=/dev/hidrawN
                                             # show raw packet changes on one
                                             # hidraw device (diagnostic)
@@ -69,25 +72,31 @@ AXIS_MAX = 32767.0
 CONFIG_PATH = os.path.expanduser("~/.config/legion-go-mapper/config.json")
 
 # All controls on the Legion Go and their type.
-# LT/RT are analog (ABS_Z/ABS_RZ) and are not configurable here.
 # Types: "axis" = thumbstick, "dpad" = hat switch,
-#        "button" = digital button, (legion/settings handled as "button" via HID)
+#        "button" = digital button (legion/settings handled as "button" via HID),
+#        "trigger" = analog shoulder trigger (ABS_Z/ABS_RZ, range 0-255)
 CONTROLS = [
-    ("left_stick",   "axis",   "Left thumbstick"),
-    ("right_stick",  "axis",   "Right thumbstick"),
-    ("dpad",         "dpad",   "D-pad"),
-    ("btn_y",        "button", "Y button"),
-    ("btn_a",        "button", "A button"),
-    ("btn_x",        "button", "X button"),
-    ("btn_b",        "button", "B button"),
-    ("btn_lb",       "button", "Left bumper (LB)"),
-    ("btn_rb",       "button", "Right bumper (RB)"),
-    ("btn_view",     "button", "View/Back button"),
-    ("btn_menu",     "button", "Menu/Start button"),
-    ("btn_l3",       "button", "L3 (left stick click)"),
-    ("btn_r3",       "button", "R3 (right stick click)"),
-    ("legion_btn",   "button", "Legion L button"),
-    ("settings_btn", "button", "Settings button"),
+    ("left_stick",   "axis",    "Left thumbstick"),
+    ("right_stick",  "axis",    "Right thumbstick"),
+    ("dpad",         "dpad",    "D-pad"),
+    ("btn_y",        "button",  "Y button"),
+    ("btn_a",        "button",  "A button"),
+    ("btn_x",        "button",  "X button"),
+    ("btn_b",        "button",  "B button"),
+    ("btn_lb",       "button",  "Left bumper (LB)"),
+    ("btn_rb",       "button",  "Right bumper (RB)"),
+    ("lt",           "trigger", "Left trigger (LT)"),
+    ("rt",           "trigger", "Right trigger (RT)"),
+    ("btn_view",     "button",  "View/Back button"),
+    ("btn_menu",     "button",  "Menu/Start button"),
+    ("btn_l3",       "button",  "L3 (left stick click)"),
+    ("btn_r3",       "button",  "R3 (right stick click)"),
+    ("legion_btn",   "button",  "Legion L button"),
+    ("settings_btn", "button",  "Settings button"),
+    ("btn_y1",       "button",  "Y1 button"),
+    ("btn_y2",       "button",  "Y2 button"),
+    ("btn_y3",       "button",  "Y3 button"),
+    ("btn_m3",       "button",  "M3 button"),
 ]
 
 AXIS_ACTIONS = [
@@ -113,12 +122,20 @@ BUTTON_ACTIONS = [
     ("key_esc",        "Key: Esc"),
     ("key_backspace",  "Key: Backspace"),
     ("key_delete",     "Key: Delete"),
+    ("key_super",      "Key: Super (Meta/Win)"),
+    ("key_ctrl",       "Key: Ctrl (Left)"),
+    ("key_c",          "Key: C"),
+    ("key_d",          "Key: D"),
+    ("key_tab",        "Key: Tab"),
 ]
 
+TRIGGER_ACTIONS = BUTTON_ACTIONS  # triggers act as digital buttons past threshold
+
 ACTIONS_FOR_TYPE = {
-    "axis":   AXIS_ACTIONS,
-    "dpad":   DPAD_ACTIONS,
-    "button": BUTTON_ACTIONS,
+    "axis":    AXIS_ACTIONS,
+    "dpad":    DPAD_ACTIONS,
+    "button":  BUTTON_ACTIONS,
+    "trigger": TRIGGER_ACTIONS,
 }
 
 # "none" is not in any action list (it is the "0. Disabled" option on the rebind screen),
@@ -136,12 +153,18 @@ DEFAULT_CONFIG = {
     "btn_b":        "arrow_right",
     "btn_lb":       "none",
     "btn_rb":       "none",
+    "lt":           "none",
+    "rt":           "none",
     "btn_view":     "mouse_left",
     "btn_menu":     "mouse_right",
     "btn_l3":       "none",
     "btn_r3":       "none",
     "legion_btn":   "lock_screen",
     "settings_btn": "lock_screen",
+    "btn_y1":       "none",
+    "btn_y2":       "none",
+    "btn_y3":       "none",
+    "btn_m3":       "none",
 }
 
 
@@ -265,6 +288,11 @@ ABS_LS_Y = ecodes.ABS_Y
 ABS_RS_X = ecodes.ABS_RX
 ABS_RS_Y = ecodes.ABS_RY
 
+# Trigger axes (unipolar, 0..TRIGGER_MAX)
+ABS_LT = ecodes.ABS_Z
+ABS_RT = ecodes.ABS_RZ
+TRIGGER_MAX = 255.0   # Xbox/HID gamepad standard; adjust if your device differs
+
 # D-pad hat axes
 ABS_DPAD_X = ecodes.ABS_HAT0X
 ABS_DPAD_Y = ecodes.ABS_HAT0Y
@@ -296,6 +324,11 @@ ACTION_TO_EVKEY = {
     "key_esc":       ecodes.KEY_ESC,
     "key_backspace": ecodes.KEY_BACKSPACE,
     "key_delete":    ecodes.KEY_DELETE,
+    "key_super":     ecodes.KEY_LEFTMETA,
+    "key_ctrl":      ecodes.KEY_LEFTCTRL,
+    "key_c":         ecodes.KEY_C,
+    "key_d":         ecodes.KEY_D,
+    "key_tab":       ecodes.KEY_TAB,
 }
 
 # ── Legion Go HID constants (from hhd-dev/hhd) ─────────────────────────────────
@@ -303,8 +336,10 @@ _LENOVO_VID        = 0x17EF
 _LEGION_GO_PIDS    = {0x6182, 0x6183, 0x6184, 0x6185,   # original Legion Go
                       0x61EB, 0x61EC, 0x61ED, 0x61EE}    # 2025 firmware variants
 _LEGION_REPORT_ID  = 0x74   # pkt[2] in a raw hidraw read
-_LEGION_BTN_BYTE   = 18     # byte index within the 64-byte report
-_LEGION_BTN_MASK   = 0xC0   # bit7=Legion L, bit6=Settings
+_LEGION_BTN_BYTE   = 18     # byte18: bit7=Legion L, bit6=Settings
+_LEGION_BTN_MASK   = 0xC0
+_EXTRA_BTN_BYTE    = 20     # byte20: bit7=Y1, bit6=Y2, bit5=Y3, bit2=M3
+_EXTRA_BTN_MASK    = 0xE4
 _HIDIOCGRAWINFO    = 0x80084803  # ioctl: get bus/VID/PID
 
 # ── Virtual output device ──────────────────────────────────────────────────────
@@ -315,6 +350,7 @@ def create_virtual_device():
             ecodes.KEY_UP, ecodes.KEY_DOWN, ecodes.KEY_LEFT, ecodes.KEY_RIGHT,
             ecodes.BTN_LEFT, ecodes.BTN_RIGHT,
             ecodes.KEY_Y, ecodes.KEY_ENTER, ecodes.KEY_ESC, ecodes.KEY_BACKSPACE, ecodes.KEY_DELETE,
+            ecodes.KEY_LEFTMETA, ecodes.KEY_LEFTCTRL, ecodes.KEY_C, ecodes.KEY_D, ecodes.KEY_TAB,
         ],
         ecodes.EV_REL: [
             ecodes.REL_X, ecodes.REL_Y,
@@ -372,9 +408,9 @@ def detect_mode(dev):
                 print(f"  KEY  {state}  code={event.code:3d} (0x{event.code:03x})  {name}")
             elif event.type == ecodes.EV_ABS:
                 name = abs_names.get(event.code, f"0x{event.code:03x}")
-                # Only print D-pad and hat changes to avoid stick noise
-                if event.code in (ABS_DPAD_X, ABS_DPAD_Y):
-                    print(f"  ABS  value={event.value:+6d}  code={event.code:3d}  {name}")
+                # Print D-pad, triggers; skip thumbstick noise
+                if event.code in (ABS_DPAD_X, ABS_DPAD_Y, ABS_LT, ABS_RT):
+                    print(f"  ABS  value={event.value:6d}  code={event.code:3d}  {name}")
     except KeyboardInterrupt:
         print("\nDone.")
 
@@ -476,6 +512,74 @@ def watch_hidraw_mode(path):
             pass
 
 
+def detect_hid_mode():
+    """Auto-find the Legion Go hidraw device and show a labelled byte-diff view.
+
+    Press each button (Y1, Y2, Y3, M3 …) while watching to identify which
+    byte index and bit mask changes. Bold bytes indicate what changed.
+    Output format:
+      byte:  00  01  02  03  …
+      value: xx  xx  xx  xx  …  (changed bytes in bold)
+    """
+    path = find_legion_hidraw()
+    if path is None:
+        print("Legion Go HID device not found. Make sure the controller is connected.")
+        print("You can also pass the path explicitly: --watch-hidraw=/dev/hidrawN")
+        return
+
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except (PermissionError, OSError) as e:
+        print(f"Cannot open {path}: {e}")
+        print("Try: sudo chmod a+r /dev/hidraw*  (or add a udev rule)")
+        return
+
+    print(f"Legion Go HID device: {path}")
+    print("Press buttons to identify byte/bit positions. Ctrl+C to stop.\n")
+    # Print fixed header showing byte indices 0..63
+    header = "  byte:  " + "  ".join(f"{i:02d}" for i in range(64))
+    print(header)
+    print("  " + "-" * (len(header) - 2))
+
+    prev = None
+    try:
+        while True:
+            ready, _, _ = select.select([fd], [], [], 0.5)
+            if not ready:
+                continue
+            try:
+                pkt = os.read(fd, 64)
+            except OSError:
+                break
+            if pkt == prev:
+                continue
+            if prev is not None and len(pkt) == len(prev):
+                changed = [i for i, (a, b) in enumerate(zip(prev, pkt)) if a != b]
+                parts = []
+                for i, b in enumerate(pkt):
+                    s = f"{b:02x}"
+                    parts.append(f"\033[1;33m{s}\033[0m" if i in changed else s)
+                print("  value:  " + "  ".join(parts))
+                # Print a summary line for changed bytes
+                for i in changed:
+                    old, new = prev[i], pkt[i]
+                    bits_set   = new & ~old
+                    bits_clear = old & ~new
+                    print(f"    → byte[{i:2d}]  {old:#04x} → {new:#04x}"
+                          + (f"  bits SET:   {bits_set:#04x}  ({bits_set:08b})" if bits_set   else "")
+                          + (f"  bits CLEAR: {bits_clear:#04x}  ({bits_clear:08b})" if bits_clear else ""))
+            else:
+                print("  value:  " + "  ".join(f"{b:02x}" for b in pkt))
+            prev = pkt
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
 # ── Legion Go HID device discovery ────────────────────────────────────────────
 
 def find_legion_hidraw():
@@ -567,32 +671,44 @@ def toggle_osk():
 
 def lock_hidraw_reader(stop_event: threading.Event, cfg: dict, ui: UInput):
     """
-    Watch the Legion Go HID report for Legion L / Settings button events.
+    Watch the Legion Go HID report for special button events.
     Dispatches the configured action for each button on both press and release.
 
     Byte 18 of the 64-byte report ID 0x74:
       bit 7 (0x80) = Legion L button   → cfg["legion_btn"]
       bit 6 (0x40) = Settings button   → cfg["settings_btn"]
+    Byte 20 of the 64-byte report ID 0x74:
+      bit 7 (0x80) = Y1 button         → cfg["btn_y1"]
+      bit 6 (0x40) = Y2 button         → cfg["btn_y2"]
+      bit 5 (0x20) = Y3 button         → cfg["btn_y3"]
+      bit 2 (0x04) = M3 button         → cfg["btn_m3"]
     """
     path = find_legion_hidraw()
     if path is None:
-        print("Lock-screen: Legion Go HID device not found — feature disabled.")
+        print("HID reader: Legion Go HID device not found — feature disabled.")
         print("  Make sure the controller is connected and you have read access to /dev/hidraw*.")
         return
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
     except (PermissionError, OSError) as e:
-        print(f"Lock-screen: cannot open {path}: {e}")
+        print(f"HID reader: cannot open {path}: {e}")
         print("  Try adding a udev rule: KERNEL==\"hidraw*\", ATTRS{idVendor}==\"17ef\", MODE=\"0660\", GROUP=\"input\"")
         return
 
-    _HID_BTNS = (
+    _BYTE18_BTNS = (
         (0x80, cfg.get("legion_btn",   "none")),
         (0x40, cfg.get("settings_btn", "none")),
     )
+    _BYTE20_BTNS = (
+        (0x80, cfg.get("btn_y1", "none")),
+        (0x40, cfg.get("btn_y2", "none")),
+        (0x20, cfg.get("btn_y3", "none")),
+        (0x04, cfg.get("btn_m3", "none")),
+    )
 
-    print(f"Lock-screen: monitoring {path} (Legion L + Settings)")
-    prev_btns = 0
+    print(f"HID reader: monitoring {path}")
+    prev18 = 0
+    prev20 = 0
     try:
         while not stop_event.is_set():
             ready, _, _ = select.select([fd], [], [], 0.5)
@@ -602,36 +718,27 @@ def lock_hidraw_reader(stop_event: threading.Event, cfg: dict, ui: UInput):
                 pkt = os.read(fd, 64)
             except OSError:
                 break
-            if len(pkt) < _LEGION_BTN_BYTE + 1 or pkt[2] != _LEGION_REPORT_ID:
-                continue
-            btns = pkt[_LEGION_BTN_BYTE] & _LEGION_BTN_MASK
-            if btns == prev_btns:
+            if len(pkt) < _EXTRA_BTN_BYTE + 1 or pkt[2] != _LEGION_REPORT_ID:
                 continue
 
-            for mask, action in _HID_BTNS:
-                rising  = bool(btns & mask) and not bool(prev_btns & mask)
-                falling = not bool(btns & mask) and bool(prev_btns & mask)
-                if not rising and not falling:
-                    continue
-                val = 1 if rising else 0
+            b18 = pkt[_LEGION_BTN_BYTE] & _LEGION_BTN_MASK
+            b20 = pkt[_EXTRA_BTN_BYTE]  & _EXTRA_BTN_MASK
+            if b18 == prev18 and b20 == prev20:
+                continue
 
-                if action == "lock_screen":
-                    if rising:
-                        lock_screen()
-                elif action == "osk":
-                    if rising:
-                        toggle_osk()
-                elif action == "mouse_left":
-                    ui.write(ecodes.EV_KEY, ecodes.BTN_LEFT, val)
-                    ui.syn()
-                elif action == "mouse_right":
-                    ui.write(ecodes.EV_KEY, ecodes.BTN_RIGHT, val)
-                    ui.syn()
-                elif action in ACTION_TO_EVKEY:
-                    ui.write(ecodes.EV_KEY, ACTION_TO_EVKEY[action], val)
-                    ui.syn()
+            for btns, prev, pairs in (
+                (b18, prev18, _BYTE18_BTNS),
+                (b20, prev20, _BYTE20_BTNS),
+            ):
+                for mask, action in pairs:
+                    rising  = bool(btns & mask) and not bool(prev & mask)
+                    falling = not bool(btns & mask) and bool(prev & mask)
+                    if not rising and not falling:
+                        continue
+                    _dispatch_button_action(action, 1 if rising else 0, ui)
 
-            prev_btns = btns
+            prev18 = b18
+            prev20 = b20
     finally:
         try:
             os.close(fd)
@@ -868,10 +975,55 @@ class StickKeys:
         self.ui.syn()
 
 
+class TriggerKey:
+    """Converts a unipolar trigger axis (0..TRIGGER_MAX) into press/release events.
+
+    A press is fired when value crosses above 50% of TRIGGER_MAX; released when
+    it drops back below the threshold.
+    """
+
+    THRESHOLD = TRIGGER_MAX * 0.5
+
+    def __init__(self):
+        self.pressed = False
+
+
 # ── Event processing ──────────────────────────────────────────────────────────
 
+def _dispatch_button_action(action: str, val: int, ui):
+    """Emit output for a digital button press (val=1) or release (val=0)."""
+    if action == "mouse_left":
+        ui.write(ecodes.EV_KEY, ecodes.BTN_LEFT, val)
+        ui.syn()
+    elif action == "mouse_right":
+        ui.write(ecodes.EV_KEY, ecodes.BTN_RIGHT, val)
+        ui.syn()
+    elif action == "lock_screen":
+        if val == 1:
+            lock_screen()
+    elif action == "osk":
+        if val == 1:
+            toggle_osk()
+    elif action in ACTION_TO_EVKEY:
+        ui.write(ecodes.EV_KEY, ACTION_TO_EVKEY[action], val)
+        ui.syn()
+    # "none" or unknown: do nothing
+
+
+def _dispatch_trigger(key: TriggerKey, value: int, action: str, ui):
+    """Update trigger press state and fire press/release when it crosses the threshold."""
+    if action == "none":
+        return
+    now_pressed = value > TriggerKey.THRESHOLD
+    if now_pressed == key.pressed:
+        return
+    key.pressed = now_pressed
+    _dispatch_button_action(action, 1 if now_pressed else 0, ui)
+
+
 def handle_event(event, state: State, ui: UInput, dpad: DpadKeys,
-                 ls_keys, rs_keys, cfg: dict):
+                 ls_keys, rs_keys, lt_key: TriggerKey, rt_key: TriggerKey,
+                 cfg: dict):
     """Process a single evdev event using the loaded config."""
 
     if event.type == ecodes.EV_ABS:
@@ -891,6 +1043,10 @@ def handle_event(event, state: State, ui: UInput, dpad: DpadKeys,
         elif code in (ABS_DPAD_X, ABS_DPAD_Y):
             if cfg.get("dpad", "none") == "arrow_keys":
                 dpad.update(code, event.value)
+        elif code == ABS_LT:
+            _dispatch_trigger(lt_key, event.value, cfg.get("lt", "none"), ui)
+        elif code == ABS_RT:
+            _dispatch_trigger(rt_key, event.value, cfg.get("rt", "none"), ui)
 
     elif event.type == ecodes.EV_KEY:
         cfg_key = EVCODE_TO_CONFIG_KEY.get(event.code)
@@ -900,23 +1056,7 @@ def handle_event(event, state: State, ui: UInput, dpad: DpadKeys,
         val    = event.value   # 0=release, 1=press, 2=repeat
         if val == 2:
             return   # ignore autorepeat
-
-        if action == "mouse_left":
-            ui.write(ecodes.EV_KEY, ecodes.BTN_LEFT, val)
-            ui.syn()
-        elif action == "mouse_right":
-            ui.write(ecodes.EV_KEY, ecodes.BTN_RIGHT, val)
-            ui.syn()
-        elif action == "lock_screen":
-            if val == 1:
-                lock_screen()
-        elif action == "osk":
-            if val == 1:
-                toggle_osk()
-        elif action in ACTION_TO_EVKEY:
-            ui.write(ecodes.EV_KEY, ACTION_TO_EVKEY[action], val)
-            ui.syn()
-        # "none" or unrecognised: do nothing
+        _dispatch_button_action(action, val, ui)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -924,6 +1064,10 @@ def handle_event(event, state: State, ui: UInput, dpad: DpadKeys,
 def main():
     if "--detect-all" in sys.argv:
         detect_all_mode()
+        return
+
+    if "--detect-hid" in sys.argv:
+        detect_hid_mode()
         return
 
     watch_args = [a for a in sys.argv if a.startswith("--watch-hidraw=")]
@@ -989,6 +1133,8 @@ def main():
                if cfg["left_stick"] == "arrow_keys" else None)
     rs_keys = (StickKeys(ui, ABS_RS_X, ABS_RS_Y)
                if cfg["right_stick"] == "arrow_keys" else None)
+    lt_key  = TriggerKey()
+    rt_key  = TriggerKey()
 
     print("Mapper running. Ctrl+C to stop.")
     print(f"  Thumbsticks → mouse  (speed={MOUSE_SPEED} px/s, deadzone={DEADZONE})")
@@ -1007,7 +1153,8 @@ def main():
         mover = None
 
     locker = None
-    if cfg.get("legion_btn", "none") != "none" or cfg.get("settings_btn", "none") != "none":
+    _HID_BTN_KEYS = ("legion_btn", "settings_btn", "btn_y1", "btn_y2", "btn_y3", "btn_m3")
+    if any(cfg.get(k, "none") != "none" for k in _HID_BTN_KEYS):
         locker = threading.Thread(
             target=lock_hidraw_reader, args=(stop_event, cfg, ui), daemon=True
         )
@@ -1015,7 +1162,7 @@ def main():
 
     try:
         for event in dev.read_loop():
-            handle_event(event, state, ui, dpad, ls_keys, rs_keys, cfg)
+            handle_event(event, state, ui, dpad, ls_keys, rs_keys, lt_key, rt_key, cfg)
     except KeyboardInterrupt:
         print("\nStopping.")
     finally:
