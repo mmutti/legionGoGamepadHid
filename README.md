@@ -108,6 +108,32 @@ legion-notifier --color blue --count 3 "Deploy complete"
 legion-notifier --silent --color yellow --count 5 "disk almost full"
 ```
 
+### Wrapping a command with `run`
+
+Bash pipes carry stdout but not the exit code, so `mycmd | legion-notifier` can't know whether `mycmd` succeeded. The `run` subcommand solves this by executing the command itself and using its exit code:
+
+```bash
+legion-notifier run make install
+legion-notifier run long-build.sh arg1 arg2
+legion-notifier run --count 3 --color-ok blue rsync -av src/ dst/
+```
+
+`run` is transparent: stdin/stdout/stderr pass through unchanged and the wrapped command's exit code becomes the wrapper's exit code. This means you can chain as usual:
+
+```bash
+legion-notifier run ./deploy.sh && legion-notifier run ./smoke-test.sh
+```
+
+For raw pipelines (where you want to notify on the result of a pipe), use bash's `pipefail` or `PIPESTATUS`:
+
+```bash
+set -o pipefail
+mycmd | grep X | sort; legion-notifier $?
+
+# or, per-stage:
+mycmd | tee build.log; legion-notifier ${PIPESTATUS[0]}
+```
+
 Cycle behaviour:
 
 - Up to 5 distinct pending notifications (deduped by color+count; extras dropped silently)
