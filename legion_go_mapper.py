@@ -389,6 +389,68 @@ def _rgb_build_enable(controller: str, enable: bool) -> bytes:
     r_ctrl = _rgb_controller_code(controller)
     return bytes([0x05, 0x06, 0x70, 0x02, r_ctrl, 1 if enable else 0, 0x01])
 
+
+# Fixed colors — not user-configurable in v1.
+_LED_YELLOW = (255, 180, 0)
+_LED_RED = (255, 0, 0)
+_LED_PROFILE = 1   # we always write to profile 1
+
+
+class LedController:
+    """Drives the Legion Go stick-ring LEDs via HID output reports.
+
+    All HID writes swallow OSError — LED failures never break input gating.
+    Construct with None path to get a no-op controller (useful when the
+    Legion Go hidraw device cannot be found).
+    """
+
+    def __init__(self, hidraw_path):
+        self._fd = None
+        if hidraw_path is None:
+            return
+        try:
+            self._fd = os.open(hidraw_path, os.O_WRONLY)
+        except OSError as e:
+            print(f"[led] cannot open {hidraw_path} for write: {e}")
+            self._fd = None
+
+    def _write(self, pkt: bytes) -> None:
+        if self._fd is None:
+            return
+        try:
+            os.write(self._fd, pkt)
+        except OSError as e:
+            print(f"[led] write failed: {e}")
+
+    def _issue_profile(self, mode: str, rgb, brightness: float, speed: float) -> None:
+        r, g, b = rgb
+        self._write(_rgb_build_set_profile(
+            controller="both", profile=_LED_PROFILE, mode=mode,
+            r=r, g=g, b=b, brightness=brightness, speed=speed,
+        ))
+        self._write(_rgb_build_load_profile(controller="both", profile=_LED_PROFILE))
+        self._write(_rgb_build_enable(controller="both", enable=True))
+
+    def set_enabled(self) -> None:
+        """Solid yellow — mapper running, transport mode unlocked."""
+        self._issue_profile("solid", _LED_YELLOW, brightness=1.0, speed=1.0)
+
+    def set_locked(self) -> None:
+        """Breathing red at the slowest hardware-supported rate (~0.25 Hz)."""
+        self._issue_profile("pulse", _LED_RED, brightness=1.0, speed=0.0)
+
+    def set_off(self) -> None:
+        """Disable the rings. Best-effort; errors are swallowed."""
+        self._write(_rgb_build_enable(controller="both", enable=False))
+
+    def close(self) -> None:
+        if self._fd is not None:
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = None
+
 # ── Virtual output device ──────────────────────────────────────────────────────
 
 def create_virtual_device():

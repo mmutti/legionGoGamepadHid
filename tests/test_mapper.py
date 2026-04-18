@@ -385,3 +385,87 @@ def test_rgb_build_enable():
     assert m._rgb_build_enable(controller="both", enable=False) == bytes(
         [0x05, 0x06, 0x70, 0x02, 0x03, 0, 0x01]
     )
+
+# ── LedController ─────────────────────────────────────────────────────────────
+
+def test_led_controller_no_path_is_noop(monkeypatch):
+    # Constructor with None path must not raise and must make all methods no-op
+    led = m.LedController(None)
+    led.set_enabled()    # must not raise
+    led.set_locked()     # must not raise
+    led.set_off()        # must not raise
+    led.close()
+
+
+def test_led_controller_set_enabled_writes_yellow(tmp_path, monkeypatch):
+    writes = []
+
+    def fake_open(path, flags):
+        return 99  # sentinel fd
+
+    def fake_write(fd, data):
+        assert fd == 99
+        writes.append(bytes(data))
+        return len(data)
+
+    def fake_close(fd):
+        pass
+
+    monkeypatch.setattr(m.os, "open", fake_open)
+    monkeypatch.setattr(m.os, "write", fake_write)
+    monkeypatch.setattr(m.os, "close", fake_close)
+
+    led = m.LedController("/dev/hidrawX")
+    led.set_enabled()
+
+    # Expect 3 writes: set_profile, load_profile, enable (for "both" rings).
+    assert len(writes) == 3
+    # First write: set_profile with solid mode, yellow, brightness=1.0, speed=1.0
+    first = writes[0]
+    assert first[0] == 0x05
+    assert first[2] == 0x72      # command byte for set_profile
+    assert first[5] == 1          # mode=solid
+    assert first[6:9] == bytes([255, 180, 0])  # RGB yellow
+
+
+def test_led_controller_set_locked_writes_red_pulse(tmp_path, monkeypatch):
+    writes = []
+    monkeypatch.setattr(m.os, "open", lambda p, f: 99)
+    monkeypatch.setattr(m.os, "write", lambda fd, d: writes.append(bytes(d)) or len(d))
+    monkeypatch.setattr(m.os, "close", lambda fd: None)
+
+    led = m.LedController("/dev/hidrawX")
+    led.set_locked()
+
+    assert writes[0][5] == 2              # mode=pulse
+    assert writes[0][6:9] == bytes([255, 0, 0])  # RGB red
+    assert writes[0][10] == 63            # period=63 means slowest (~0.25 Hz)
+
+
+def test_led_controller_set_off_sends_disable(tmp_path, monkeypatch):
+    writes = []
+    monkeypatch.setattr(m.os, "open", lambda p, f: 99)
+    monkeypatch.setattr(m.os, "write", lambda fd, d: writes.append(bytes(d)) or len(d))
+    monkeypatch.setattr(m.os, "close", lambda fd: None)
+
+    led = m.LedController("/dev/hidrawX")
+    led.set_off()
+    # set_off issues a single rgb_enable(False)
+    assert len(writes) == 1
+    assert writes[0][2] == 0x70       # enable command byte
+    assert writes[0][5] == 0           # enable=False
+
+
+def test_led_controller_swallows_oserror(tmp_path, monkeypatch):
+    def raising_write(fd, data):
+        raise OSError("device gone")
+
+    monkeypatch.setattr(m.os, "open", lambda p, f: 99)
+    monkeypatch.setattr(m.os, "write", raising_write)
+    monkeypatch.setattr(m.os, "close", lambda fd: None)
+
+    led = m.LedController("/dev/hidrawX")
+    # Must not raise — errors are logged and swallowed
+    led.set_enabled()
+    led.set_locked()
+    led.set_off()
