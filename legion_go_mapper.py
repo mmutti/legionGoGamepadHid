@@ -1029,32 +1029,44 @@ class OrientationWatcher:
 
 # ── Mouse mover thread ────────────────────────────────────────────────────────
 
-def mouse_mover(state: State, ui: UInput, stop_event: threading.Event):
+def _mouse_mover_tick(state: State, ui: UInput, transport, remainder_x: float = 0.0, remainder_y: float = 0.0):
+    """One iteration of the mouse_mover loop. Gated by transport.locked.
+
+    Returns updated (remainder_x, remainder_y) for accumulation across iterations.
+    """
+    if transport is not None and transport.locked:
+        return remainder_x, remainder_y
+
+    interval = 1.0 / POLL_HZ
+    raw_x, raw_y, _ = state.combined_mouse_vector()
+    with state.lock:
+        orientation = state.orientation
+    rot_x, rot_y = rotate_for_orientation(raw_x, raw_y, orientation)
+    nx, ny = apply_deadzone_and_curve(rot_x, rot_y, math.hypot(rot_x, rot_y))
+
+    pixels_per_tick = MOUSE_SPEED * interval
+    dx_f = nx * pixels_per_tick + remainder_x
+    dy_f = ny * pixels_per_tick + remainder_y
+    dx = int(dx_f)
+    dy = int(dy_f)
+    remainder_x = dx_f - dx
+    remainder_y = dy_f - dy
+
+    if dx != 0 or dy != 0:
+        ui.write(ecodes.EV_REL, ecodes.REL_X, dx)
+        ui.write(ecodes.EV_REL, ecodes.REL_Y, dy)
+        ui.syn()
+
+    return remainder_x, remainder_y
+
+
+def mouse_mover(state: State, ui: UInput, stop_event: threading.Event, transport=None):
     interval = 1.0 / POLL_HZ
     remainder_x = 0.0
     remainder_y = 0.0
     while not stop_event.is_set():
         t0 = time.monotonic()
-
-        raw_x, raw_y, _ = state.combined_mouse_vector()
-        with state.lock:
-            orientation = state.orientation
-        rot_x, rot_y = rotate_for_orientation(raw_x, raw_y, orientation)
-        nx, ny = apply_deadzone_and_curve(rot_x, rot_y, math.hypot(rot_x, rot_y))
-
-        pixels_per_tick = MOUSE_SPEED * interval
-        dx_f = nx * pixels_per_tick + remainder_x
-        dy_f = ny * pixels_per_tick + remainder_y
-        dx = int(dx_f)
-        dy = int(dy_f)
-        remainder_x = dx_f - dx
-        remainder_y = dy_f - dy
-
-        if dx != 0 or dy != 0:
-            ui.write(ecodes.EV_REL, ecodes.REL_X, dx)
-            ui.write(ecodes.EV_REL, ecodes.REL_Y, dy)
-            ui.syn()
-
+        remainder_x, remainder_y = _mouse_mover_tick(state, ui, transport, remainder_x, remainder_y)
         elapsed = time.monotonic() - t0
         sleep_time = interval - elapsed
         if sleep_time > 0:

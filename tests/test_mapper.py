@@ -586,3 +586,30 @@ def test_handle_event_processed_when_unlocked():
                    cfg, transport)
 
     assert ui.write.called
+
+
+# ── mouse_mover gating ────────────────────────────────────────────────────────
+
+def test_mouse_mover_tick_locked_emits_nothing():
+    """Single iteration of mouse_mover with locked=True emits no writes."""
+    leds = _FakeLeds()
+    transport = m.TransportMode(leds)
+    transport.toggle()   # locked
+    state = m.State()
+    # Simulate stick deflection so the unlocked path WOULD emit writes
+    state.update_axis(m.ABS_LS_X, int(0.8 * m.AXIS_MAX))
+    ui = mock.MagicMock()
+
+    m._mouse_mover_tick(state, ui, transport)
+    ui.write.assert_not_called()
+
+
+def test_mouse_mover_tick_unlocked_emits_when_deflected():
+    leds = _FakeLeds()
+    transport = m.TransportMode(leds)   # unlocked
+    state = m.State()
+    state.update_axis(m.ABS_LS_X, int(0.8 * m.AXIS_MAX))
+    ui = mock.MagicMock()
+
+    m._mouse_mover_tick(state, ui, transport)
+    assert ui.write.called
