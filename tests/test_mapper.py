@@ -848,3 +848,47 @@ def test_gnome_watcher_ignores_active_true():
     w = m.GnomeScreenSaverWatcher(transport, {"gnome_auto_unlock": True})
     w._on_active_changed(True)
     assert transport.locked is False   # unchanged
+
+
+# ── LED custom colors ────────────────────────────────────────────────────────
+
+def test_default_config_has_led_color_keys():
+    assert m.DEFAULT_CONFIG["led_color_enabled"] == [255, 180, 0]
+    assert m.DEFAULT_CONFIG["led_color_locked"] == [255, 0, 0]
+
+
+def test_led_controller_uses_custom_color_enabled(monkeypatch):
+    writes = []
+    monkeypatch.setattr(m.os, "open", lambda p, f: 99)
+    monkeypatch.setattr(m.os, "write", lambda fd, d: writes.append(bytes(d)) or len(d))
+    monkeypatch.setattr(m.os, "close", lambda fd: None)
+
+    led = m.LedController("/dev/hidrawX", color_enabled=[0, 255, 128])
+    led.set_enabled()
+    # First write is the set_profile packet; RGB bytes are at [6:9]
+    assert writes[0][6:9] == bytes([0, 255, 128])
+
+
+def test_led_controller_uses_custom_color_locked(monkeypatch):
+    writes = []
+    monkeypatch.setattr(m.os, "open", lambda p, f: 99)
+    monkeypatch.setattr(m.os, "write", lambda fd, d: writes.append(bytes(d)) or len(d))
+    monkeypatch.setattr(m.os, "close", lambda fd: None)
+
+    led = m.LedController("/dev/hidrawX", color_locked=(128, 0, 255))
+    led.set_locked()
+    assert writes[0][6:9] == bytes([128, 0, 255])
+
+
+def test_led_controller_falls_back_to_defaults_when_colors_none(monkeypatch):
+    writes = []
+    monkeypatch.setattr(m.os, "open", lambda p, f: 99)
+    monkeypatch.setattr(m.os, "write", lambda fd, d: writes.append(bytes(d)) or len(d))
+    monkeypatch.setattr(m.os, "close", lambda fd: None)
+
+    led = m.LedController("/dev/hidrawX")   # no color overrides
+    led.set_enabled()
+    assert writes[0][6:9] == bytes([255, 180, 0])   # default yellow
+    writes.clear()
+    led.set_locked()
+    assert writes[0][6:9] == bytes([255, 0, 0])     # default red

@@ -84,6 +84,13 @@ Optional: set `"gnome_auto_unlock": true` in `~/.config/legion-go-mapper/config.
 
 Tune the hold duration via `"long_press_ms"` (default 500). Bind `transport_mode` to any button's short or long press via `python3 legion_go_mapper.py --configure`.
 
+LED colors are configurable as `[R, G, B]` arrays (each 0–255) in the same config file:
+
+```json
+"led_color_enabled": [255, 180, 0],
+"led_color_locked":  [255,   0, 0]
+```
+
 ## Tuning
 
 Open `legion_go_mapper.py` and adjust the constants at the top:

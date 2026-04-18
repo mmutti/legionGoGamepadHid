@@ -186,6 +186,9 @@ DEFAULT_CONFIG = {
     "btn_m3_long":       "none",
     "long_press_ms":     500,
     "gnome_auto_unlock": False,
+    # Stick-ring LED colors as [R, G, B] (0..255 each).
+    "led_color_enabled": [255, 180, 0],   # yellow when mapper is running / unlocked
+    "led_color_locked":  [255,   0, 0],   # red when transport mode is locked
 }
 
 
@@ -448,7 +451,7 @@ def _rgb_build_enable(controller: str, enable: bool) -> bytes:
     return bytes([0x05, 0x06, 0x70, 0x02, r_ctrl, 1 if enable else 0, 0x01])
 
 
-# Fixed colors — not user-configurable in v1.
+# Default colors if the user hasn't overridden them in config.
 _LED_YELLOW = (255, 180, 0)
 _LED_RED = (255, 0, 0)
 _LED_PROFILE = 1   # we always write to profile 1
@@ -460,10 +463,15 @@ class LedController:
     All HID writes swallow OSError — LED failures never break input gating.
     Construct with None path to get a no-op controller (useful when the
     Legion Go hidraw device cannot be found).
+
+    color_enabled / color_locked override the default yellow/red. Accept
+    any 3-element iterable of ints (e.g. list from JSON, tuple).
     """
 
-    def __init__(self, hidraw_path):
+    def __init__(self, hidraw_path, color_enabled=None, color_locked=None):
         self._fd = None
+        self._color_enabled = tuple(color_enabled) if color_enabled is not None else _LED_YELLOW
+        self._color_locked = tuple(color_locked) if color_locked is not None else _LED_RED
         if hidraw_path is None:
             return
         try:
@@ -490,12 +498,12 @@ class LedController:
         self._write(_rgb_build_enable(controller="both", enable=True))
 
     def set_enabled(self) -> None:
-        """Solid yellow — mapper running, transport mode unlocked."""
-        self._issue_profile("solid", _LED_YELLOW, brightness=1.0, speed=1.0)
+        """Solid color — mapper running, transport mode unlocked."""
+        self._issue_profile("solid", self._color_enabled, brightness=1.0, speed=1.0)
 
     def set_locked(self) -> None:
-        """Breathing red at the slowest hardware-supported rate (~0.25 Hz)."""
-        self._issue_profile("pulse", _LED_RED, brightness=1.0, speed=0.0)
+        """Breathing color at the slowest hardware-supported rate (~0.25 Hz)."""
+        self._issue_profile("pulse", self._color_locked, brightness=1.0, speed=0.0)
 
     def set_off(self) -> None:
         """Disable the rings. Best-effort; errors are swallowed."""
@@ -1480,8 +1488,12 @@ def main():
     cfg = load_config()
 
     hidraw_path = find_legion_hidraw()
-    leds = LedController(hidraw_path)
-    leds.set_enabled()           # go solid yellow immediately
+    leds = LedController(
+        hidraw_path,
+        color_enabled=cfg.get("led_color_enabled"),
+        color_locked=cfg.get("led_color_locked"),
+    )
+    leds.set_enabled()           # go solid color immediately
     transport = TransportMode(leds)
     long_dispatcher = LongPressDispatcher(
         ui, transport, long_press_ms=cfg.get("long_press_ms", 500)
