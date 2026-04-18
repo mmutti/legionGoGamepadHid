@@ -158,7 +158,9 @@ Add new entries to `notification_colors` to expand the palette. Unknown color na
 
 ### Haptic feedback (optional)
 
-Each LED flash can be accompanied by a rumble pulse on the gamepad motors. Off by default — it's invasive in game sessions. Enable it via config:
+Each LED flash can be accompanied by a rumble pulse on the gamepad motors, so you can feel notifications even when the handheld is face-down or you're not looking. Off by default — rumble is invasive during games.
+
+**Enable it** in `~/.config/legion-go-mapper/config.json`:
 
 ```json
 "notification_haptic": {
@@ -169,10 +171,48 @@ Each LED flash can be accompanied by a rumble pulse on the gamepad motors. Off b
 }
 ```
 
-- `strong` / `weak`: motor magnitudes (0.0..1.0). `strong` is the heavy/low-frequency motor, `weak` is the light/high-frequency one
-- `duration_ms`: how long each rumble pulse lasts. Matches `on_ms` (150 ms) by default so rumble and LED flash are visually/kinetically synchronized
+**Parameters:**
 
-Haptic silently disables itself if the gamepad driver doesn't advertise `FF_RUMBLE` (logged at startup).
+| Key | Range | Effect |
+|---|---|---|
+| `enabled` | bool | Master switch. `false` = no rumble, other fields ignored |
+| `strong` | 0.0–1.0 | Heavy/low-frequency motor (the "thump") |
+| `weak`   | 0.0–1.0 | Light/high-frequency motor (the "buzz") |
+| `duration_ms` | int | How long each rumble pulse lasts. Match `on_ms` (150 ms) for rumble and LED flash to align naturally |
+
+**How it works:** one rumble pulse fires per LED flash (not per on/off pair), so a notification with `count=2` gives two quick synchronized flash+rumble beats, then 2 s pause, then repeat until dismissed.
+
+**Tuning suggestions:**
+
+```json
+// Subtle — you'll feel it but not jump
+"notification_haptic": {"enabled": true, "strong": 0.2, "weak": 0.1, "duration_ms": 120}
+
+// Emphatic — hard to miss, still short enough to be polite
+"notification_haptic": {"enabled": true, "strong": 0.6, "weak": 0.3, "duration_ms": 180}
+
+// Texture-only (no "bump", just buzz — good for background tasks)
+"notification_haptic": {"enabled": true, "strong": 0.0, "weak": 0.5, "duration_ms": 150}
+
+// Bump-only (no buzz — good for one-off "done" signals)
+"notification_haptic": {"enabled": true, "strong": 0.5, "weak": 0.0, "duration_ms": 200}
+```
+
+**Hardware requirement:** the gamepad input device must advertise the `FF_RUMBLE` capability. On Linux, the built-in `xpad` driver normally provides this for the Legion Go's gamepad. Verify with:
+
+```bash
+# Replace event6 with your gamepad's event device (see mapper startup log)
+sudo evtest /dev/input/event6 | head -30
+```
+
+Look for `Force feedback supported` in the output. If it's missing, the mapper logs `[haptic] device does not support FF_RUMBLE — disabled.` at startup and the feature silently becomes a no-op — LED flashes still work normally.
+
+**Troubleshooting:**
+
+- **No rumble, no warning in logs:** confirm `notification_haptic.enabled` is `true` in config and the service was restarted after the config change (`systemctl --user restart legion-go-mapper`).
+- **`[haptic] upload_effect failed (...)`:** usually a permissions issue on the event device. Make sure you're in the `input` group (the installer handles this). A kernel update or driver change can also temporarily break FF support.
+- **Rumble but no LED flash (or vice versa):** independent subsystems. LEDs use `/dev/hidraw*`, haptic uses `/dev/input/event*`. Check both devices are accessible. A missing hidraw permission does not affect haptic, and vice versa.
+- **Rumble feels "laggy" compared to the LED:** lower `duration_ms` closer to `on_ms` (default 150). The upload happens once at startup — per-pulse overhead is just a single write().
 
 ### Binding dismiss
 

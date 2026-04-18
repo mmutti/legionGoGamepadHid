@@ -54,6 +54,8 @@ Everything lives in a single file: `legion_go_mapper.py`.
 
 **`toggle_osk`**: Toggles the GNOME on-screen keyboard via `gsettings`.
 
+**LED notifier** (`LedController`, `Notifier`, `NotifierService`, `HapticController`): Stick-ring LEDs drive both transport-mode state (solid yellow / breathing red) and a notification cycle. `Notifier` keeps a deduped pending list (max 5) and cycles through items forever with a 2 s pause between bursts; the `notifier_dismiss` action clears the cycle. `NotifierService` owns the session-bus name `net.legiongo.Mapper` and exposes `Flash(color, count)` — **used instead of D-Bus BecomeMonitor**, which dbus-broker blocks by policy on stock GNOME. The `legion-notifier` CLI calls this via `gdbus`. `HapticController` pre-uploads one FF_RUMBLE effect on the gamepad device and replays it per flash; opt-in via `notification_haptic.enabled`. All four classes degrade silently when their dependencies (hidraw, session bus, FF_RUMBLE capability) are missing.
+
 ## Tuning constants
 
 At the top of `legion_go_mapper.py`:
