@@ -880,6 +880,46 @@ def test_led_controller_uses_custom_color_locked(monkeypatch):
     assert writes[0][6:9] == bytes([128, 0, 255])
 
 
+def test_rich_main_menu_renders_non_empty_string():
+    """Smoke test: rich path doesn't crash and emits non-empty ANSI output."""
+    pytest.importorskip("rich")
+    cfg = dict(m.DEFAULT_CONFIG)
+    out = m._rich_main_menu(cfg)
+    assert isinstance(out, str)
+    assert len(out) > 0
+    # ANSI escape codes use the ESC character (0x1B)
+    assert "\x1b[" in out
+
+
+def test_rich_action_list_renders_short_and_long():
+    pytest.importorskip("rich")
+    short_out = m._rich_action_list("Y button", "button", "arrow_up", "SHORT")
+    long_out = m._rich_action_list("Y button", "button", "none", "LONG")
+    assert "\x1b[" in short_out and "\x1b[" in long_out
+    # The title reflects which prompt it is
+    assert "SHORT" in short_out
+    assert "LONG" in long_out
+
+
+def test_prompt_button_binding_rich_path_collects_output(monkeypatch):
+    """Same test as test_configure_mode_sets_long_action but confirms that
+    print_fn received ANSI-containing strings (proof the rich path was used)."""
+    pytest.importorskip("rich")
+    inputs = iter(["1", "1"])
+    outputs = []
+    short, long_action = m._prompt_button_binding(
+        name="Y button", ctype="button",
+        current_short="arrow_up", current_long="none",
+        input_fn=lambda: next(inputs),
+        print_fn=lambda *a, **kw: outputs.append(" ".join(str(x) for x in a)),
+    )
+    expected_first = m.ACTIONS_FOR_TYPE["button"][0][0]
+    assert short == expected_first
+    assert long_action == expected_first
+    # At least one captured output line contains ANSI codes
+    assert any("\x1b[" in line for line in outputs)
+
+
 def test_led_controller_falls_back_to_defaults_when_colors_none(monkeypatch):
     writes = []
     monkeypatch.setattr(m.os, "open", lambda p, f: 99)

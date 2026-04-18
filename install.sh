@@ -30,6 +30,14 @@ else
     echo "      OK"
 fi
 
+echo "      Checking rich (used by --configure TUI)..."
+if ! "$PYTHON" -c "import rich" 2>/dev/null; then
+    echo "      Installing rich via pip..."
+    "$PYTHON" -m pip install rich --break-system-packages
+else
+    echo "      OK"
+fi
+
 # ── 2. uinput kernel module ────────────────────────────────────────────────────
 echo "[2/4] Configuring uinput kernel module..."
 if ! lsmod | grep -q uinput; then

@@ -20,7 +20,8 @@ All bindings are configurable via `--configure` (see below). Defaults:
 ## Requirements
 
 - Debian (latest stable) with Python 3
-- `python3-evdev` and `python3-dbus` (installed automatically by the install script)
+- `python3-evdev`, `python3-dbus`, and `rich` (installed automatically by the install script)
+- A terminal configured with a Nerd Font (e.g. FiraCode Nerd Font) if you want the `--configure` TUI icons to render — non-NF terminals show boxes but the menu still works
 - `iio-sensor-proxy` recommended for automatic orientation correction (usually pre-installed on GNOME)
 
 ## Install

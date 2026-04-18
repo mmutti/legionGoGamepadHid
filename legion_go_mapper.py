@@ -145,6 +145,164 @@ ACTIONS_FOR_TYPE = {
 ACTION_LABELS = {a: l for actions in ACTIONS_FOR_TYPE.values() for a, l in actions}
 ACTION_LABELS["none"] = "Disabled"
 
+# ── FiraCode Nerd Font icon maps for the --configure TUI ──────────────────────
+# Requires a terminal with a Nerd Font configured (e.g. FiraCode Nerd Font).
+# Non-NF terminals will render boxes; behavior is unaffected.
+
+_CONTROL_ICONS = {
+    "left_stick":   "\U000f04d7",  # nf-md-joystick
+    "right_stick":  "\U000f04d7",
+    "dpad":         "\U000f1192",  # nf-md-gamepad (directional)
+    "btn_y":        "\U000f0b26",  # nf-md-controller_classic
+    "btn_a":        "\U000f0b26",
+    "btn_x":        "\U000f0b26",
+    "btn_b":        "\U000f0b26",
+    "btn_lb":       "\uf077",      # nf-fa-chevron_up
+    "btn_rb":       "\uf077",
+    "lt":           "\U000f0616",  # nf-md-arrow_expand_up
+    "rt":           "\U000f0616",
+    "btn_view":     "\uf0c9",      # nf-fa-bars
+    "btn_menu":     "\uf0c9",
+    "btn_l3":       "\U000f0d86",  # nf-md-gesture_tap_button
+    "btn_r3":       "\U000f0d86",
+    "legion_btn":   "\uf17c",      # nf-fa-linux
+    "settings_btn": "\uf013",      # nf-fa-cog
+    "btn_y1":       "\uf02b",      # nf-fa-tag (back paddle)
+    "btn_y2":       "\uf02b",
+    "btn_y3":       "\uf02b",
+    "btn_m3":       "\uf02b",
+}
+
+_ACTION_ICONS = {
+    "mouse":          "\U000f037d",  # nf-md-mouse
+    "mouse_left":     "\U000f037d",
+    "mouse_right":    "\U000f037d",
+    "arrow_keys":     "\uf0b2",      # nf-fa-arrows (compass)
+    "arrow_up":       "\uf062",      # nf-fa-arrow_up
+    "arrow_down":     "\uf063",
+    "arrow_left":     "\uf060",
+    "arrow_right":    "\uf061",
+    "key_y":          "\U000f030c",  # nf-md-keyboard
+    "key_return":     "\uf149",      # nf-fa-level-down (enter)
+    "key_esc":        "\U000f030c",
+    "key_backspace":  "\U000f030c",
+    "key_delete":     "\U000f030c",
+    "key_super":      "\U000f030c",
+    "key_ctrl":       "\U000f030c",
+    "key_c":          "\U000f030c",
+    "key_d":          "\U000f030c",
+    "key_q":          "\U000f030c",
+    "key_tab":        "\U000f030c",
+    "transport_mode": "\uf023",      # nf-fa-lock
+    "lock_screen":    "\uf023",
+    "osk":            "\U000f0b13",  # nf-md-keyboard_outline
+    "none":           "\uf05e",      # nf-fa-ban
+}
+
+
+def _try_import_rich():
+    """Return True if rich is importable; used by --configure TUI."""
+    try:
+        import rich  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _render_rich(renderable) -> str:
+    """Render a rich renderable to a string with ANSI codes embedded.
+
+    Uses `Console(file=StringIO, force_terminal=True)` so the resulting
+    string carries colors; when printed to a real terminal the ANSI
+    escape sequences are interpreted. Tests that capture via print_fn
+    see the raw string — no test assertions depend on ANSI codes.
+    """
+    import io
+    from rich.console import Console
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=True, color_system="truecolor", width=100)
+    console.print(renderable)
+    return buf.getvalue()
+
+
+def _rich_main_menu(cfg) -> str:
+    """Build the rich main menu table. Returns a string with ANSI codes."""
+    from rich.table import Table
+    from rich.text import Text
+
+    t = Table(title="Legion Go Gamepad — Button Configuration",
+              title_style="bold yellow",
+              header_style="bold yellow",
+              border_style="yellow",
+              expand=False)
+    t.add_column("#", justify="right", style="dim", width=3)
+    t.add_column("", width=2)
+    t.add_column("Control", style="white")
+    t.add_column("Short-press", style="cyan")
+    t.add_column("Long-press", style="cyan")
+
+    for i, (key, ctype, name) in enumerate(CONTROLS, 1):
+        icon = _CONTROL_ICONS.get(key, " ")
+        short_action = cfg.get(key, "none")
+        short_label = ACTION_LABELS.get(short_action, short_action)
+        if short_action == "transport_mode":
+            short_text = Text(short_label, style="bold red")
+        elif short_action == "none":
+            short_text = Text(short_label, style="dim")
+        else:
+            short_text = Text(short_label)
+
+        if ctype == "button":
+            long_action = cfg.get(f"{key}_long", "none")
+            long_label = ACTION_LABELS.get(long_action, long_action)
+            if long_action == "transport_mode":
+                long_text = Text(long_label, style="bold red")
+            elif long_action == "none":
+                long_text = Text(long_label, style="dim")
+            else:
+                long_text = Text(long_label)
+        else:
+            long_text = Text("—", style="dim")
+
+        t.add_row(str(i), icon, name, short_text, long_text)
+
+    return _render_rich(t)
+
+
+def _rich_action_list(name: str, ctype: str, current: str, which: str) -> str:
+    """Build a rich action-selection table for either SHORT or LONG press.
+
+    `which` is "SHORT" or "LONG" — drives the title and accent color.
+    """
+    from rich.table import Table
+    from rich.text import Text
+
+    actions = ACTIONS_FOR_TYPE[ctype]
+    title_color = "yellow" if which == "SHORT" else "red"
+    t = Table(title=f"{name} — choose {which}-press action",
+              title_style=f"bold {title_color}",
+              header_style=f"bold {title_color}",
+              border_style=title_color,
+              expand=False)
+    t.add_column("#", justify="right", style="dim", width=3)
+    t.add_column("", width=2)
+    t.add_column("Action", style="white")
+    t.add_column("", style="green")   # "← current" marker column
+
+    for j, (akey, alabel) in enumerate(actions, 1):
+        icon = _ACTION_ICONS.get(akey, " ")
+        label_style = "bold red" if akey == "transport_mode" else ""
+        label = Text(alabel, style=label_style) if label_style else Text(alabel)
+        marker = Text("← current", style="bold yellow") if current == akey else Text("")
+        t.add_row(str(j), icon, label, marker)
+
+    # "0. Disabled" row
+    none_marker = Text("← current", style="bold yellow") if current == "none" else Text("")
+    t.add_row("0", _ACTION_ICONS.get("none", " "),
+              Text("Disabled", style="dim"), none_marker)
+
+    return _render_rich(t)
+
 DEFAULT_CONFIG = {
     "left_stick":        "mouse",
     "right_stick":       "mouse",
@@ -215,75 +373,75 @@ def save_config(cfg):
 def _prompt_button_binding(name: str, ctype: str, current_short: str,
                            current_long: str, input_fn=None, print_fn=None):
     """Prompt for a button's short-press action and (if discrete-button)
-    optional long-press action. Returns (short_action, long_action)."""
+    optional long-press action. Returns (short_action, long_action).
+
+    Uses rich for colored tables with Nerd Font icons when rich is
+    importable; falls back to plain text otherwise.
+    """
     if input_fn is None:
         input_fn = input
     if print_fn is None:
         print_fn = print
     actions = ACTIONS_FOR_TYPE[ctype]
+    use_rich = _try_import_rich()
 
-    # Short-press prompt — same shape as before
-    while True:
-        print_fn(f"\n  {name} — choose SHORT-press action:")
+    def _render_list(which: str, current: str) -> None:
+        if use_rich:
+            print_fn(_rich_action_list(name, ctype, current, which))
+            return
+        print_fn(f"\n  {name} — choose {which}-press action:")
         for j, (akey, alabel) in enumerate(actions, 1):
-            marker = "  ← current" if current_short == akey else ""
+            marker = "  ← current" if current == akey else ""
             print_fn(f"  {j:3d}. {alabel}{marker}")
-        print_fn(f"    0. Disabled{('  ← current' if current_short == 'none' else '')}")
-        choice = input_fn().strip()
-        if choice == "0":
-            short_action = "none"
-            break
-        try:
-            idx = int(choice) - 1
-        except ValueError:
-            print_fn("  Invalid input.")
-            continue
-        if not (0 <= idx < len(actions)):
-            print_fn("  Invalid input.")
-            continue
-        short_action = actions[idx][0]
-        break
+        print_fn(f"    0. Disabled{('  ← current' if current == 'none' else '')}")
 
-    # Long-press prompt — only for discrete-button control type
+    def _pick(which: str, current: str) -> str:
+        while True:
+            _render_list(which, current)
+            choice = input_fn().strip()
+            if choice == "0":
+                return "none"
+            try:
+                idx = int(choice) - 1
+            except ValueError:
+                print_fn("  Invalid input.")
+                continue
+            if not (0 <= idx < len(actions)):
+                print_fn("  Invalid input.")
+                continue
+            return actions[idx][0]
+
+    short_action = _pick("SHORT", current_short)
     if ctype != "button":
         return short_action, "none"
-
-    while True:
-        print_fn(f"\n  {name} — choose LONG-press action (optional):")
-        for j, (akey, alabel) in enumerate(actions, 1):
-            marker = "  ← current" if current_long == akey else ""
-            print_fn(f"  {j:3d}. {alabel}{marker}")
-        print_fn(f"    0. Disabled{('  ← current' if current_long == 'none' else '')}")
-        choice = input_fn().strip()
-        if choice == "0":
-            return short_action, "none"
-        try:
-            idx = int(choice) - 1
-        except ValueError:
-            print_fn("  Invalid input.")
-            continue
-        if not (0 <= idx < len(actions)):
-            print_fn("  Invalid input.")
-            continue
-        return short_action, actions[idx][0]
+    long_action = _pick("LONG", current_long)
+    return short_action, long_action
 
 
 def configure_mode():
     """Interactive CLI to rebind all Legion Go controls."""
     cfg = load_config()
+    use_rich = _try_import_rich()
 
     while True:
-        print("\nLegion Go Gamepad — Button Configuration")
-        print("=" * 43)
-        print(f"Config: {CONFIG_PATH}\n")
+        if use_rich:
+            print(_rich_main_menu(cfg))
+            print(f"  Config file: \033[2m{CONFIG_PATH}\033[0m")
+            print("  \033[33ms\033[0m) Save and restart service   "
+                  "\033[33mq\033[0m) Quit without saving")
+            prompt = "Enter number to reconfigure, 's' to save, 'q' to quit: "
+        else:
+            print("\nLegion Go Gamepad — Button Configuration")
+            print("=" * 43)
+            print(f"Config: {CONFIG_PATH}\n")
+            for i, (key, ctype, name) in enumerate(CONTROLS, 1):
+                label = ACTION_LABELS.get(cfg.get(key, "none"), cfg.get(key, "none"))
+                print(f"  {i:2d}.  {name:<28}  [{label}]")
+            print("\n  s.  Save and restart service")
+            print("  q.  Quit without saving\n")
+            prompt = "Enter number to reconfigure, 's' to save, 'q' to quit: "
 
-        for i, (key, ctype, name) in enumerate(CONTROLS, 1):
-            label = ACTION_LABELS.get(cfg.get(key, "none"), cfg.get(key, "none"))
-            print(f"  {i:2d}.  {name:<28}  [{label}]")
-
-        print("\n  s.  Save and restart service")
-        print("  q.  Quit without saving\n")
-        choice = input("Enter number to reconfigure, 's' to save, 'q' to quit: ").strip().lower()
+        choice = input(prompt).strip().lower()
 
         if choice == "q":
             print("Quit — no changes saved.")
