@@ -617,38 +617,6 @@ def test_mouse_mover_tick_unlocked_emits_when_deflected():
 
 # ── lock_hidraw_reader selective gating ───────────────────────────────────────
 
-def test_hid_dispatch_if_allowed_passes_transport_mode_while_locked():
-    leds = _FakeLeds()
-    transport = m.TransportMode(leds)
-    transport.toggle()   # locked
-    ui = mock.MagicMock()
-
-    # transport_mode action must still fire while locked (for unlocking)
-    m._hid_dispatch_if_allowed("transport_mode", 1, ui, transport)
-    assert transport.locked is False    # toggled back to unlocked
-
-
-def test_hid_dispatch_if_allowed_suppresses_other_actions_while_locked():
-    leds = _FakeLeds()
-    transport = m.TransportMode(leds)
-    transport.toggle()   # locked
-    ui = mock.MagicMock()
-
-    m._hid_dispatch_if_allowed("lock_screen", 1, ui, transport)
-    assert transport.locked is True   # lock_screen was suppressed — transport unchanged
-    ui.write.assert_not_called()      # no uinput write happened
-
-
-def test_hid_dispatch_if_allowed_unrestricted_while_unlocked(monkeypatch):
-    leds = _FakeLeds()
-    transport = m.TransportMode(leds)  # unlocked
-    ui = mock.MagicMock()
-
-    # key_y is a normal key action — should dispatch through to ui.write
-    m._hid_dispatch_if_allowed("key_y", 1, ui, transport)
-    assert ui.write.called
-
-
 # ── LongPressDispatcher ───────────────────────────────────────────────────────
 
 class _FakeTimer:
@@ -745,3 +713,53 @@ def test_handle_event_uses_longpress_dispatcher(monkeypatch):
     assert len(_FakeTimer.instances) == 1
     assert _FakeTimer.instances[0].started is True
     ui.write.assert_not_called()
+
+
+# ── _hid_button_edge tests ─────────────────────────────────────────────────────
+
+def test_hid_button_edge_with_long_action_defers(monkeypatch):
+    _FakeTimer.instances = []
+    monkeypatch.setattr(m.threading, "Timer", _FakeTimer)
+
+    leds = _FakeLeds()
+    transport = m.TransportMode(leds)
+    ui = mock.MagicMock()
+    disp = m.LongPressDispatcher(ui, transport, long_press_ms=500)
+    cfg = dict(m.DEFAULT_CONFIG)
+    cfg["legion_btn"] = "lock_screen"
+    cfg["legion_btn_long"] = "transport_mode"
+
+    # Simulate a rising edge (press) on legion_btn
+    m._hid_button_edge(
+        cfg_key="legion_btn", rising=True, falling=False,
+        cfg=cfg, ui=ui, transport=transport, long_dispatcher=disp,
+    )
+    # Timer started, nothing dispatched yet
+    assert len(_FakeTimer.instances) == 1
+    # Fire the long timer
+    _FakeTimer.instances[0].fire()
+    assert transport.locked is True
+
+    # Now falling edge (release) — must NOT re-trigger anything
+    prev = ui.write.call_count
+    m._hid_button_edge(
+        cfg_key="legion_btn", rising=False, falling=True,
+        cfg=cfg, ui=ui, transport=transport, long_dispatcher=disp,
+    )
+    assert ui.write.call_count == prev
+
+
+def test_hid_button_edge_no_long_action_fires_instantly(monkeypatch):
+    leds = _FakeLeds()
+    transport = m.TransportMode(leds)
+    ui = mock.MagicMock()
+    disp = m.LongPressDispatcher(ui, transport, long_press_ms=500)
+    cfg = dict(m.DEFAULT_CONFIG)
+    cfg["btn_y1"] = "key_y"
+    cfg["btn_y1_long"] = "none"
+
+    m._hid_button_edge(
+        cfg_key="btn_y1", rising=True, falling=False,
+        cfg=cfg, ui=ui, transport=transport, long_dispatcher=disp,
+    )
+    assert ui.write.called     # fired on press

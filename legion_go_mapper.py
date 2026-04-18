@@ -867,10 +867,11 @@ def toggle_osk():
         pass
 
 
-def lock_hidraw_reader(stop_event: threading.Event, cfg: dict, ui: UInput, transport=None):
+def lock_hidraw_reader(stop_event: threading.Event, cfg: dict, ui: UInput, transport=None, long_dispatcher=None):
     """
     Watch the Legion Go HID report for special button events.
-    Dispatches the configured action for each button on both press and release.
+    Dispatches the configured action for each button on both press and release,
+    respecting the transport-lock gate and long-press dispatcher.
 
     Byte 18 of the 64-byte report ID 0x74:
       bit 7 (0x80) = Legion L button   → cfg["legion_btn"]
@@ -893,15 +894,15 @@ def lock_hidraw_reader(stop_event: threading.Event, cfg: dict, ui: UInput, trans
         print("  Try adding a udev rule: KERNEL==\"hidraw*\", ATTRS{idVendor}==\"17ef\", MODE=\"0660\", GROUP=\"input\"")
         return
 
-    _BYTE18_BTNS = (
-        (0x80, cfg.get("legion_btn",   "none")),
-        (0x40, cfg.get("settings_btn", "none")),
+    _BYTE18_KEYS = (
+        (0x80, "legion_btn"),
+        (0x40, "settings_btn"),
     )
-    _BYTE20_BTNS = (
-        (0x80, cfg.get("btn_y1", "none")),
-        (0x40, cfg.get("btn_y2", "none")),
-        (0x20, cfg.get("btn_y3", "none")),
-        (0x04, cfg.get("btn_m3", "none")),
+    _BYTE20_KEYS = (
+        (0x80, "btn_y1"),
+        (0x40, "btn_y2"),
+        (0x20, "btn_y3"),
+        (0x04, "btn_m3"),
     )
 
     print(f"HID reader: monitoring {path}")
@@ -925,15 +926,17 @@ def lock_hidraw_reader(stop_event: threading.Event, cfg: dict, ui: UInput, trans
                 continue
 
             for btns, prev, pairs in (
-                (b18, prev18, _BYTE18_BTNS),
-                (b20, prev20, _BYTE20_BTNS),
+                (b18, prev18, _BYTE18_KEYS),
+                (b20, prev20, _BYTE20_KEYS),
             ):
-                for mask, action in pairs:
+                for mask, cfg_key in pairs:
                     rising  = bool(btns & mask) and not bool(prev & mask)
                     falling = not bool(btns & mask) and bool(prev & mask)
-                    if not rising and not falling:
-                        continue
-                    _hid_dispatch_if_allowed(action, 1 if rising else 0, ui, transport)
+                    _hid_button_edge(
+                        cfg_key=cfg_key, rising=rising, falling=falling,
+                        cfg=cfg, ui=ui, transport=transport,
+                        long_dispatcher=long_dispatcher,
+                    )
 
             prev18 = b18
             prev20 = b20
@@ -1223,15 +1226,29 @@ def _dispatch_button_action(action: str, val: int, ui, transport=None):
     # "none" or unknown: do nothing
 
 
-def _hid_dispatch_if_allowed(action: str, val: int, ui, transport) -> None:
-    """Dispatch an HID-button action through the transport-mode gate.
-
-    While locked, only 'transport_mode' is permitted; all other actions
-    are suppressed so they can't leak through the lock.
-    """
-    if transport is not None and transport.locked and action != "transport_mode":
+def _hid_button_edge(cfg_key: str, rising: bool, falling: bool, *,
+                     cfg: dict, ui, transport, long_dispatcher) -> None:
+    """Handle a rising/falling edge for a HID-read button, respecting
+    the transport-lock gate and long-press dispatcher."""
+    if not rising and not falling:
         return
-    _dispatch_button_action(action, val, ui, transport)
+    action = cfg.get(cfg_key, "none")
+    long_action = cfg.get(f"{cfg_key}_long", "none")
+
+    # Transport-lock gate: while locked, suppress unless action OR long_action
+    # is transport_mode (the unlock path).
+    if transport is not None and transport.locked:
+        if action != "transport_mode" and long_action != "transport_mode":
+            return
+
+    if long_dispatcher is None or long_action == "none":
+        _dispatch_button_action(action, 1 if rising else 0, ui, transport)
+        return
+
+    if rising:
+        long_dispatcher.press(cfg_key, short=action, long_action=long_action)
+    elif falling:
+        long_dispatcher.release(cfg_key)
 
 
 def _dispatch_trigger(key: TriggerKey, value: int, action: str, ui, transport=None):
