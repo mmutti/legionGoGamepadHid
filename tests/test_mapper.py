@@ -857,6 +857,29 @@ def test_default_config_has_led_color_keys():
     assert m.DEFAULT_CONFIG["led_color_locked"] == [255, 0, 0]
 
 
+# ── Notifier config ──────────────────────────────────────────────────────────
+
+def test_default_config_has_notifier_keys():
+    assert m.DEFAULT_CONFIG["notifications_enabled"] is True
+    assert m.DEFAULT_CONFIG["notify_on_all_notifications"] is False
+    assert m.DEFAULT_CONFIG["default_flash"] == {"color": "blue", "count": 1}
+    palette = m.DEFAULT_CONFIG["notification_colors"]
+    assert palette["green"] == [0, 255, 0]
+    assert palette["red"] == [255, 0, 0]
+
+
+def test_load_config_merges_notifier_defaults(tmp_path, monkeypatch):
+    """A pre-existing config file without the new keys must still get them back."""
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(json.dumps({"left_stick": "mouse"}))
+    monkeypatch.setattr(m, "CONFIG_PATH", str(cfg_file))
+
+    cfg = m.load_config()
+    assert cfg["notifications_enabled"] is True
+    assert "green" in cfg["notification_colors"]
+    assert cfg["default_flash"]["count"] == 1
+
+
 def test_led_controller_uses_custom_color_enabled(monkeypatch):
     writes = []
     monkeypatch.setattr(m.os, "open", lambda p, f: 99)
@@ -1054,6 +1077,227 @@ def test_prompt_button_binding_rich_path_collects_output(monkeypatch):
     assert long_action == expected_first
     # At least one captured output line contains ANSI codes
     assert any("\x1b[" in line for line in outputs)
+
+
+# ── Notifier ──────────────────────────────────────────────────────────────────
+
+class _NotifierLeds:
+    def __init__(self):
+        self.calls = []
+
+    def flash_color(self, rgb):
+        self.calls.append(("flash_color", tuple(rgb)))
+
+    def set_off(self):
+        self.calls.append(("set_off",))
+
+    def set_enabled(self):
+        self.calls.append(("set_enabled",))
+
+    def set_locked(self):
+        self.calls.append(("set_locked",))
+
+
+class _NotifierTransport:
+    def __init__(self, locked=False):
+        self.locked = locked
+
+
+def test_notifier_flash_and_restore_enabled_when_unlocked():
+    leds = _NotifierLeds()
+    sleeps = []
+    n = m.Notifier(leds, transport=_NotifierTransport(locked=False),
+                   sleep_fn=sleeps.append, on_ms=10, off_ms=10, gap_ms=5)
+
+    n._process_item(((0, 255, 0), 2))
+
+    assert leds.calls == [
+        ("flash_color", (0, 255, 0)),
+        ("set_off",),
+        ("flash_color", (0, 255, 0)),
+        ("set_off",),
+        ("set_enabled",),
+    ]
+    # sleeps: on, off, on, off, gap
+    assert sleeps == [0.01, 0.01, 0.01, 0.01, 0.005]
+
+
+def test_notifier_restores_locked_state_after_flash_in_transport_mode():
+    leds = _NotifierLeds()
+    n = m.Notifier(leds, transport=_NotifierTransport(locked=True),
+                   sleep_fn=lambda s: None, on_ms=1, off_ms=1, gap_ms=1)
+
+    n._process_item(((255, 0, 0), 1))
+
+    assert leds.calls[-1] == ("set_locked",)
+
+
+def test_notifier_restores_enabled_when_no_transport():
+    leds = _NotifierLeds()
+    n = m.Notifier(leds, transport=None,
+                   sleep_fn=lambda s: None, on_ms=1, off_ms=1, gap_ms=1)
+
+    n._process_item(((0, 0, 255), 1))
+
+    assert leds.calls[-1] == ("set_enabled",)
+
+
+def test_notifier_enqueue_drops_when_queue_is_full():
+    leds = _NotifierLeds()
+    n = m.Notifier(leds, transport=None, sleep_fn=lambda s: None,
+                   on_ms=1, off_ms=1, gap_ms=1, max_queue=5)
+
+    for _ in range(5):
+        n.enqueue((0, 255, 0), 2)
+    n.enqueue((255, 0, 0), 2)   # 6th silently dropped
+    assert n.qsize() == 5
+
+
+class _RecordingNotifier:
+    def __init__(self):
+        self.enqueued = []
+
+    def enqueue(self, rgb, count):
+        self.enqueued.append((tuple(rgb), count))
+
+
+def test_parse_hints_extracts_color_and_count():
+    color, count = m._parse_notification_hints(
+        {"x-legion-color": "green", "x-legion-count": 3}
+    )
+    assert color == "green"
+    assert count == 3
+
+
+def test_parse_hints_without_legion_hints_returns_none():
+    color, count = m._parse_notification_hints(
+        {"urgency": 1, "category": "device.added"}
+    )
+    assert color is None
+    assert count == 1
+
+
+def test_parse_hints_malformed_count_falls_back_to_1():
+    color, count = m._parse_notification_hints(
+        {"x-legion-color": "red", "x-legion-count": "not-a-number"}
+    )
+    assert color == "red"
+    assert count == 1
+
+
+def test_dispatch_enqueues_when_color_hint_present():
+    cfg = dict(m.DEFAULT_CONFIG)
+    notifier = _RecordingNotifier()
+    enqueued = m._dispatch_notification(
+        notifier, cfg, {"x-legion-color": "green", "x-legion-count": 2}
+    )
+    assert enqueued is True
+    assert notifier.enqueued == [((0, 255, 0), 2)]
+
+
+def test_dispatch_drops_unknown_color_name():
+    cfg = dict(m.DEFAULT_CONFIG)
+    notifier = _RecordingNotifier()
+    enqueued = m._dispatch_notification(
+        notifier, cfg, {"x-legion-color": "magenta"}
+    )
+    assert enqueued is False
+    assert notifier.enqueued == []
+
+
+def test_dispatch_skips_when_no_hints_and_notify_all_off():
+    cfg = dict(m.DEFAULT_CONFIG)
+    notifier = _RecordingNotifier()
+    enqueued = m._dispatch_notification(notifier, cfg, {"urgency": 1})
+    assert enqueued is False
+
+
+def test_dispatch_uses_default_flash_when_notify_all_on():
+    cfg = dict(m.DEFAULT_CONFIG)
+    cfg["notify_on_all_notifications"] = True
+    cfg["default_flash"] = {"color": "blue", "count": 2}
+    notifier = _RecordingNotifier()
+    enqueued = m._dispatch_notification(notifier, cfg, {"urgency": 1})
+    assert enqueued is True
+    assert notifier.enqueued == [((0, 0, 255), 2)]
+
+
+def test_notification_watcher_disabled_by_config_exits_silently(capsys):
+    cfg = dict(m.DEFAULT_CONFIG)
+    cfg["notifications_enabled"] = False
+    w = m.NotificationWatcher(notifier=_RecordingNotifier(), cfg=cfg)
+    w.run()         # must return immediately without error
+    out = capsys.readouterr().out
+    # When disabled there's nothing to log — no-op.
+    assert "D-Bus" not in out
+
+
+def test_notification_watcher_no_dbus_is_silent(monkeypatch, capsys):
+    import builtins
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "dbus":
+            raise ImportError("no dbus")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    cfg = dict(m.DEFAULT_CONFIG)
+    w = m.NotificationWatcher(notifier=_RecordingNotifier(), cfg=cfg)
+    w.run()
+    out = capsys.readouterr().out
+    assert "notifier disabled" in out.lower()
+
+
+def test_notifier_enqueue_clamps_count():
+    leds = _NotifierLeds()
+    n = m.Notifier(leds, transport=None, sleep_fn=lambda s: None,
+                   on_ms=1, off_ms=1, gap_ms=1)
+
+    n.enqueue((0, 255, 0), 0)    # below min → 1
+    n.enqueue((0, 255, 0), 99)   # above max → 10
+    assert n.qsize() == 2
+    first = n._q.get_nowait()
+    second = n._q.get_nowait()
+    assert first[1] == 1
+    assert second[1] == 10
+
+
+def test_led_controller_flash_color_writes_solid_with_custom_rgb(monkeypatch):
+    writes = []
+    monkeypatch.setattr(m.os, "open", lambda p, f: 99)
+    monkeypatch.setattr(m.os, "write", lambda fd, d: writes.append(bytes(d)) or len(d))
+    monkeypatch.setattr(m.os, "close", lambda fd: None)
+
+    led = m.LedController("/dev/hidrawX")
+    led.flash_color((0, 255, 0))
+
+    # Same 3-write sequence as set_enabled, but with our RGB and solid mode.
+    assert len(writes) == 3
+    first = writes[0]
+    assert first[2] == 0x72           # set_profile
+    assert first[5] == 1               # mode=solid
+    assert first[6:9] == bytes([0, 255, 0])
+
+
+def test_led_controller_flash_color_is_noop_without_fd():
+    led = m.LedController(None)
+    led.flash_color((0, 255, 0))      # must not raise
+
+
+def test_led_controller_lock_serializes_writes(monkeypatch):
+    # Verify that _issue_profile holds the controller's lock during its 3 writes,
+    # so a concurrent set_off cannot interleave packets.
+    import threading
+
+    monkeypatch.setattr(m.os, "open", lambda p, f: 99)
+    monkeypatch.setattr(m.os, "write", lambda fd, d: len(d))
+    monkeypatch.setattr(m.os, "close", lambda fd: None)
+
+    led = m.LedController("/dev/hidrawX")
+    assert hasattr(led, "_lock")
+    assert isinstance(led._lock, type(threading.Lock()))
 
 
 def test_led_controller_falls_back_to_defaults_when_colors_none(monkeypatch):

@@ -43,6 +43,7 @@ import subprocess
 import sys
 import time
 import math
+import queue
 import threading
 import evdev
 from evdev import ecodes, UInput
@@ -553,6 +554,24 @@ DEFAULT_CONFIG = {
     # Stick-ring LED colors as [R, G, B] (0..255 each).
     "led_color_enabled": [255, 180, 0],   # yellow when mapper is running / unlocked
     "led_color_locked":  [255,   0, 0],   # red when transport mode is locked
+    # ── Notifier: LED-flash on GNOME notifications ────────────────────────────
+    # When True, subscribes to GNOME's org.freedesktop.Notifications.Notify
+    # and reacts to notifications carrying the hints x-legion-color / x-legion-count.
+    "notifications_enabled": True,
+    # Named palette used by the notifier. Keys are color names referenced by
+    # --hint=string:x-legion-color:NAME and by default_flash.color.
+    "notification_colors": {
+        "green":  [0, 255,   0],
+        "red":    [255, 0,   0],
+        "blue":   [0,   0, 255],
+        "yellow": [255, 180, 0],
+        "white":  [255, 255, 255],
+    },
+    # When True, every GNOME notification (not only legion-notifier ones)
+    # triggers a flash with default_flash color/count. Useful as a silent-mode
+    # visual indicator on the handheld. Off by default.
+    "notify_on_all_notifications": False,
+    "default_flash": {"color": "blue", "count": 1},
 }
 
 
@@ -850,6 +869,10 @@ class LedController:
         self._fd = None
         self._color_enabled = tuple(color_enabled) if color_enabled is not None else _LED_YELLOW
         self._color_locked = tuple(color_locked) if color_locked is not None else _LED_RED
+        # Serializes HID writes. TransportMode.toggle() and the Notifier thread
+        # both call into this controller; without a lock their 3-packet
+        # profile-update sequences can interleave and corrupt protocol state.
+        self._lock = threading.Lock()
         if hidraw_path is None:
             return
         try:
@@ -868,12 +891,13 @@ class LedController:
 
     def _issue_profile(self, mode: str, rgb, brightness: float, speed: float) -> None:
         r, g, b = rgb
-        self._write(_rgb_build_set_profile(
-            controller="both", profile=_LED_PROFILE, mode=mode,
-            r=r, g=g, b=b, brightness=brightness, speed=speed,
-        ))
-        self._write(_rgb_build_load_profile(controller="both", profile=_LED_PROFILE))
-        self._write(_rgb_build_enable(controller="both", enable=True))
+        with self._lock:
+            self._write(_rgb_build_set_profile(
+                controller="both", profile=_LED_PROFILE, mode=mode,
+                r=r, g=g, b=b, brightness=brightness, speed=speed,
+            ))
+            self._write(_rgb_build_load_profile(controller="both", profile=_LED_PROFILE))
+            self._write(_rgb_build_enable(controller="both", enable=True))
 
     def set_enabled(self) -> None:
         """Solid color — mapper running, transport mode unlocked."""
@@ -883,9 +907,15 @@ class LedController:
         """Breathing color at the slowest hardware-supported rate (~0.25 Hz)."""
         self._issue_profile("pulse", self._color_locked, brightness=1.0, speed=0.0)
 
+    def flash_color(self, rgb) -> None:
+        """Solid color at the given RGB — used by the Notifier thread for a
+        single flash-on step. No-op if the controller has no fd."""
+        self._issue_profile("solid", tuple(rgb), brightness=1.0, speed=1.0)
+
     def set_off(self) -> None:
         """Disable the rings. Best-effort; errors are swallowed."""
-        self._write(_rgb_build_enable(controller="both", enable=False))
+        with self._lock:
+            self._write(_rgb_build_enable(controller="both", enable=False))
 
     def close(self) -> None:
         if self._fd is not None:
@@ -932,6 +962,77 @@ class TransportMode:
             if self._locked:
                 self._locked = False
                 self._leds.set_enabled()
+
+
+class Notifier:
+    """Notification LED flasher with a bounded queue.
+
+    enqueue() is non-blocking and drops silently when the queue is full, so
+    a notification storm can never back up the daemon. Each queued item is a
+    (rgb_tuple, count) pair; the worker thread plays count×(on/off) pulses,
+    a trailing gap, then restores the LEDs to the base state (solid-enabled
+    or breathing-locked, depending on transport).
+    """
+
+    _COUNT_MIN = 1
+    _COUNT_MAX = 10
+
+    def __init__(self, leds, transport, *,
+                 sleep_fn=time.sleep,
+                 on_ms: int = 150, off_ms: int = 150, gap_ms: int = 400,
+                 max_queue: int = 5):
+        self._leds = leds
+        self._transport = transport
+        self._sleep_fn = sleep_fn
+        self._on_s = on_ms / 1000.0
+        self._off_s = off_ms / 1000.0
+        self._gap_s = gap_ms / 1000.0
+        self._q: "queue.Queue" = queue.Queue(maxsize=max_queue)
+        self._stop = threading.Event()
+        self._thread = None
+
+    def enqueue(self, rgb, count: int) -> None:
+        clamped = max(self._COUNT_MIN, min(int(count), self._COUNT_MAX))
+        try:
+            self._q.put_nowait((tuple(rgb), clamped))
+        except queue.Full:
+            pass  # drop oldest-style: simply ignore new arrivals when full
+
+    def qsize(self) -> int:
+        return self._q.qsize()
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                item = self._q.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            if self._stop.is_set():
+                return
+            self._process_item(item)
+
+    def _process_item(self, item) -> None:
+        rgb, count = item
+        for _ in range(count):
+            self._leds.flash_color(rgb)
+            self._sleep_fn(self._on_s)
+            self._leds.set_off()
+            self._sleep_fn(self._off_s)
+        self._sleep_fn(self._gap_s)
+        self._restore_base()
+
+    def _restore_base(self) -> None:
+        if self._transport is not None and self._transport.locked:
+            self._leds.set_locked()
+        else:
+            self._leds.set_enabled()
 
 
 class LongPressDispatcher:
@@ -1523,6 +1624,117 @@ class OrientationWatcher:
             self.state.set_orientation(str(changed[_ORIENTATION_PROP]))
 
 
+def _parse_notification_hints(hints):
+    """Extract (color_name, count) from a GNOME notification hints dict.
+
+    Returns (None, 1) if x-legion-color is not present. Missing / malformed
+    x-legion-count falls back to 1.
+    """
+    color = None
+    count = 1
+    for k, v in hints.items():
+        try:
+            k_str = str(k)
+        except Exception:
+            continue
+        if k_str == "x-legion-color":
+            try:
+                color = str(v)
+            except Exception:
+                color = None
+        elif k_str == "x-legion-count":
+            try:
+                count = int(v)
+            except (TypeError, ValueError):
+                count = 1
+    return color, count
+
+
+def _dispatch_notification(notifier, cfg, hints):
+    """Decide whether to enqueue a flash for the given notification hints.
+
+    Returns True if something was enqueued, False otherwise. Shape:
+      - x-legion-color present & known name → enqueue with that color + count
+      - x-legion-color missing & notify_on_all_notifications → default_flash
+      - otherwise: no-op
+    """
+    color, count = _parse_notification_hints(hints)
+    palette = cfg.get("notification_colors", {})
+    if color is not None:
+        rgb = palette.get(color)
+        if rgb is None:
+            return False
+        notifier.enqueue(rgb, count)
+        return True
+    if not cfg.get("notify_on_all_notifications", False):
+        return False
+    default = cfg.get("default_flash", {"color": "blue", "count": 1})
+    rgb = palette.get(default.get("color", "blue"))
+    if rgb is None:
+        return False
+    try:
+        default_count = int(default.get("count", 1))
+    except (TypeError, ValueError):
+        default_count = 1
+    notifier.enqueue(rgb, default_count)
+    return True
+
+
+class NotificationWatcher(threading.Thread):
+    """Subscribes to org.freedesktop.Notifications.Notify on the session bus
+    via D-Bus BecomeMonitor. Pushes matching notifications to the Notifier.
+
+    Gated by cfg['notifications_enabled']. Degrades silently (non-fatal
+    warning) if dbus, gi, the session bus, or BecomeMonitor are unavailable.
+    """
+
+    _RULE = "interface='org.freedesktop.Notifications',member='Notify'"
+
+    def __init__(self, notifier, cfg):
+        super().__init__(daemon=True)
+        self._notifier = notifier
+        self._cfg = cfg
+
+    def run(self) -> None:
+        if not self._cfg.get("notifications_enabled", True):
+            return
+        try:
+            import dbus
+            from dbus.mainloop.glib import DBusGMainLoop
+            from gi.repository import GLib
+        except ImportError:
+            print("[notifier] python3-dbus or gi not available — notifier disabled.")
+            return
+        try:
+            DBusGMainLoop(set_as_default=True)
+            bus = dbus.SessionBus()
+            monitoring = dbus.Interface(
+                bus.get_object("org.freedesktop.DBus", "/org/freedesktop/DBus"),
+                "org.freedesktop.DBus.Monitoring",
+            )
+            monitoring.BecomeMonitor([self._RULE], dbus.UInt32(0))
+            bus.add_message_filter(self._on_message)
+            GLib.MainLoop().run()
+        except Exception as e:
+            print(f"[notifier] D-Bus monitor setup failed ({e}) — notifier disabled.")
+
+    def _on_message(self, _bus, msg):
+        try:
+            if msg.get_member() != "Notify":
+                return
+            if msg.get_interface() != "org.freedesktop.Notifications":
+                return
+            args = msg.get_args_list()
+            # Notify signature: (app_name, replaces_id, app_icon, summary,
+            #                     body, actions, hints, expire_timeout)
+            if len(args) < 7:
+                return
+            hints = dict(args[6])
+            _dispatch_notification(self._notifier, self._cfg, hints)
+        except Exception:
+            pass  # never let a malformed message crash the monitor
+
+
 class GnomeScreenSaverWatcher(threading.Thread):
     """Subscribes to org.gnome.ScreenSaver.ActiveChanged on the session bus.
 
@@ -1880,6 +2092,11 @@ def main():
     gnome_watcher = GnomeScreenSaverWatcher(transport, cfg)
     gnome_watcher.start()
 
+    notifier = Notifier(leds, transport)
+    notifier.start()
+    notification_watcher = NotificationWatcher(notifier, cfg)
+    notification_watcher.start()
+
     ls_keys = (StickKeys(ui, ABS_LS_X, ABS_LS_Y)
                if cfg["left_stick"] == "arrow_keys" else None)
     rs_keys = (StickKeys(ui, ABS_RS_X, ABS_RS_Y)
@@ -1923,6 +2140,7 @@ def main():
         print("\nStopping.")
     finally:
         stop_event.set()
+        notifier.stop()
         if mover is not None:
             mover.join(timeout=1)
         if locker is not None:
