@@ -716,3 +716,32 @@ def test_longpress_timeout_fires_long_and_suppresses_release(monkeypatch):
     prev_call_count = ui.write.call_count
     disp.release("legion_btn")
     assert ui.write.call_count == prev_call_count
+
+
+def test_handle_event_uses_longpress_dispatcher(monkeypatch):
+    """EV_KEY events flow through LongPressDispatcher when one is provided."""
+    _FakeTimer.instances = []
+    monkeypatch.setattr(m.threading, "Timer", _FakeTimer)
+
+    leds = _FakeLeds()
+    transport = m.TransportMode(leds)
+    ui = mock.MagicMock()
+    cfg = dict(m.DEFAULT_CONFIG)
+    cfg["btn_y"] = "key_y"
+    cfg["btn_y_long"] = "transport_mode"
+
+    disp = m.LongPressDispatcher(ui, transport, long_press_ms=500)
+
+    ev = mock.MagicMock()
+    ev.type = evdev.ecodes.EV_KEY
+    ev.code = evdev.ecodes.BTN_Y
+    ev.value = 1
+
+    m.handle_event(ev, m.State(), ui, m.DpadKeys(ui),
+                   None, None, m.TriggerKey(), m.TriggerKey(),
+                   cfg, transport, disp)
+
+    # Since btn_y_long is set, timer must be started, and short not yet fired
+    assert len(_FakeTimer.instances) == 1
+    assert _FakeTimer.instances[0].started is True
+    ui.write.assert_not_called()

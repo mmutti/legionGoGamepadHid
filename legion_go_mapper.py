@@ -1247,7 +1247,7 @@ def _dispatch_trigger(key: TriggerKey, value: int, action: str, ui, transport=No
 
 def handle_event(event, state: State, ui: UInput, dpad: DpadKeys,
                  ls_keys, rs_keys, lt_key: TriggerKey, rt_key: TriggerKey,
-                 cfg: dict, transport=None):
+                 cfg: dict, transport=None, long_dispatcher=None):
     """Process a single evdev event using the loaded config."""
     if transport is not None and transport.locked:
         return
@@ -1279,10 +1279,18 @@ def handle_event(event, state: State, ui: UInput, dpad: DpadKeys,
         if cfg_key is None:
             return
         action = cfg.get(cfg_key, "none")
-        val    = event.value   # 0=release, 1=press, 2=repeat
+        long_action = cfg.get(f"{cfg_key}_long", "none")
+        val = event.value
         if val == 2:
-            return   # ignore autorepeat
-        _dispatch_button_action(action, val, ui, transport)
+            return
+        if long_dispatcher is None or long_action == "none":
+            # Legacy fast path — no deferral
+            _dispatch_button_action(action, val, ui, transport)
+        else:
+            if val == 1:
+                long_dispatcher.press(cfg_key, short=action, long_action=long_action)
+            else:
+                long_dispatcher.release(cfg_key)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
