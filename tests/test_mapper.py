@@ -901,6 +901,119 @@ def test_rich_action_list_renders_short_and_long():
     assert "LONG" in long_out
 
 
+def test_main_menu_items_has_save_and_exit_rows():
+    items = m._main_menu_items()
+    assert items[-2] == ("__save__", "meta", "Save and restart service")
+    assert items[-1] == ("__exit__", "meta", "Exit without saving")
+    # Controls come first, meta rows last
+    assert items[: len(m.CONTROLS)] == m.CONTROLS
+
+
+def test_arrow_pick_action_enter_picks_preselected_current(monkeypatch):
+    """Pre-selection matches `current`; Enter returns it without moving."""
+    pytest.importorskip("rich")
+    keys = iter([m._KEY_ENTER_CODES[0]])   # just Enter
+    out = m._arrow_pick_action(
+        name="Y button", ctype="button",
+        current="arrow_up", which="SHORT",
+        read_key_fn=lambda: next(keys),
+    )
+    assert out == "arrow_up"
+
+
+def test_arrow_pick_action_down_then_enter_picks_next(monkeypatch):
+    pytest.importorskip("rich")
+    actions = m.ACTIONS_FOR_TYPE["button"]
+    # Start at index 0 (current="none" → pre-selects Disabled row at end)
+    # Navigate: DOWN wraps around to index 0 (first action)
+    keys = iter([m._KEY_DOWN, m._KEY_ENTER_CODES[0]])
+    out = m._arrow_pick_action(
+        name="btn_y1", ctype="button",
+        current="none", which="SHORT",
+        read_key_fn=lambda: next(keys),
+    )
+    # Disabled pre-selected at end; DOWN wraps to index 0 (first action)
+    assert out == actions[0][0]
+
+
+def test_arrow_pick_action_esc_returns_none():
+    pytest.importorskip("rich")
+    keys = iter([m._KEY_ESC])
+    out = m._arrow_pick_action(
+        name="btn_y", ctype="button",
+        current="arrow_up", which="SHORT",
+        read_key_fn=lambda: next(keys),
+    )
+    assert out is None
+
+
+def test_arrow_pick_action_digit_shortcut():
+    pytest.importorskip("rich")
+    actions = m.ACTIONS_FOR_TYPE["button"]
+    # "3" is the 3rd action in ACTIONS_FOR_TYPE["button"]
+    out = m._arrow_pick_action(
+        name="btn_y", ctype="button",
+        current="none", which="SHORT",
+        read_key_fn=lambda: "3",
+    )
+    assert out == actions[2][0]
+
+
+def test_arrow_pick_action_zero_picks_disabled():
+    pytest.importorskip("rich")
+    out = m._arrow_pick_action(
+        name="btn_y", ctype="button",
+        current="arrow_up", which="SHORT",
+        read_key_fn=lambda: "0",
+    )
+    assert out == "none"
+
+
+def test_arrow_configure_exit_row_via_arrows(monkeypatch, tmp_path):
+    """Arrow down to the Exit row and press Enter; cfg is not saved."""
+    pytest.importorskip("rich")
+    monkeypatch.setattr(m, "CONFIG_PATH", str(tmp_path / "config.json"))
+    cfg = dict(m.DEFAULT_CONFIG)
+    cfg_before = dict(cfg)
+    items = m._main_menu_items()
+    exit_idx = next(i for i, it in enumerate(items) if it[0] == "__exit__")
+
+    # Press DOWN enough times to land on exit row, then ENTER
+    keys = [m._KEY_DOWN] * exit_idx + [m._KEY_ENTER_CODES[0]]
+    keys_iter = iter(keys)
+    m._arrow_configure(cfg, read_key_fn=lambda: next(keys_iter))
+
+    # cfg unchanged, no file written
+    assert cfg == cfg_before
+    assert not (tmp_path / "config.json").exists()
+
+
+def test_arrow_configure_q_shortcut_exits(monkeypatch, tmp_path):
+    pytest.importorskip("rich")
+    monkeypatch.setattr(m, "CONFIG_PATH", str(tmp_path / "config.json"))
+    cfg = dict(m.DEFAULT_CONFIG)
+    cfg_before = dict(cfg)
+    m._arrow_configure(cfg, read_key_fn=lambda: "q")
+    assert cfg == cfg_before
+
+
+def test_arrow_configure_rebinds_btn_y_short_via_arrows(monkeypatch, tmp_path):
+    """Press '4' (btn_y hotkey), ENTER opens it, arrow sub-menu picks Disabled."""
+    pytest.importorskip("rich")
+    monkeypatch.setattr(m, "CONFIG_PATH", str(tmp_path / "config.json"))
+    cfg = dict(m.DEFAULT_CONFIG)
+
+    # Keys:
+    #   "4"           → activate btn_y (index 3)
+    #   "0"           → sub-menu SHORT: Disabled
+    #   m._KEY_ESC    → sub-menu LONG: cancel (don't change long binding)
+    #   "q"           → main menu: quit
+    keys = iter(["4", "0", m._KEY_ESC, "q"])
+    m._arrow_configure(cfg, read_key_fn=lambda: next(keys))
+    assert cfg["btn_y"] == "none"
+    assert cfg["btn_y_long"] == m.DEFAULT_CONFIG["btn_y_long"]   # unchanged
+
+
 def test_prompt_button_binding_rich_path_collects_output(monkeypatch):
     """Same test as test_configure_mode_sets_long_action but confirms that
     print_fn received ANSI-containing strings (proof the rich path was used)."""

@@ -209,6 +209,34 @@ def _try_import_rich():
         return False
 
 
+def _try_import_readchar():
+    """Return True if readchar is importable; enables arrow-key navigation."""
+    try:
+        import readchar  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+# Key constants match readchar.key.* on Linux. Defined here so scripted
+# tests don't need to import readchar, and so the code doesn't require
+# readchar to be present at module-import time.
+_KEY_UP    = "\x1b[A"
+_KEY_DOWN  = "\x1b[B"
+_KEY_ENTER_CODES = ("\r", "\n")
+_KEY_ESC   = "\x1b"
+
+
+_MAIN_MENU_META_ITEMS = [
+    ("__save__", "meta", "Save and restart service"),
+    ("__exit__", "meta", "Exit without saving"),
+]
+
+
+def _main_menu_items():
+    return list(CONTROLS) + _MAIN_MENU_META_ITEMS
+
+
 def _render_rich(renderable) -> str:
     """Render a rich renderable to a string with ANSI codes embedded.
 
@@ -225,54 +253,86 @@ def _render_rich(renderable) -> str:
     return buf.getvalue()
 
 
-def _rich_main_menu(cfg) -> str:
-    """Build the rich main menu table. Returns a string with ANSI codes."""
+def _build_main_menu_table(cfg, selected: int = -1):
+    """Build a rich Table for the main menu. If `selected >= 0`, that row
+    is highlighted with a cursor marker and reverse-video style.
+    """
     from rich.table import Table
     from rich.text import Text
 
+    items = _main_menu_items()
     t = Table(title="Legion Go Gamepad — Button Configuration",
               title_style="bold yellow",
               header_style="bold yellow",
               border_style="yellow",
               expand=False)
+    t.add_column("", width=1)   # cursor marker
     t.add_column("#", justify="right", style="dim", width=3)
     t.add_column("", width=2)
     t.add_column("Control", style="white")
     t.add_column("Short-press", style="cyan")
     t.add_column("Long-press", style="cyan")
 
-    for i, (key, ctype, name) in enumerate(CONTROLS, 1):
-        icon = _CONTROL_ICONS.get(key, " ")
-        short_action = cfg.get(key, "none")
-        short_label = ACTION_LABELS.get(short_action, short_action)
-        if short_action == "transport_mode":
-            short_text = Text(short_label, style="bold red")
-        elif short_action == "none":
-            short_text = Text(short_label, style="dim")
-        else:
-            short_text = Text(short_label)
+    for i, item in enumerate(items):
+        key, ctype, name = item[:3]
+        is_sel = (i == selected)
+        cursor = Text("▸", style="bold yellow") if is_sel else Text(" ")
+        row_style = "on grey23" if is_sel else None
 
-        if ctype == "button":
-            long_action = cfg.get(f"{key}_long", "none")
-            long_label = ACTION_LABELS.get(long_action, long_action)
-            if long_action == "transport_mode":
-                long_text = Text(long_label, style="bold red")
-            elif long_action == "none":
-                long_text = Text(long_label, style="dim")
+        if key == "__save__":
+            icon = "\uf0c7"  # nf-fa-save
+            row = (cursor, Text("S", style="bold green"), icon,
+                   Text(name, style="bold green"),
+                   Text(""), Text(""))
+        elif key == "__exit__":
+            icon = "\uf011"  # nf-fa-power_off
+            row = (cursor, Text("Q", style="bold"), icon,
+                   Text(name, style="dim red"),
+                   Text(""), Text(""))
+        else:
+            icon = _CONTROL_ICONS.get(key, " ")
+            short_action = cfg.get(key, "none")
+            short_label = ACTION_LABELS.get(short_action, short_action)
+            if short_action == "transport_mode":
+                short_text = Text(short_label, style="bold red")
+            elif short_action == "none":
+                short_text = Text(short_label, style="dim")
             else:
-                long_text = Text(long_label)
-        else:
-            long_text = Text("—", style="dim")
+                short_text = Text(short_label)
 
-        t.add_row(str(i), icon, name, short_text, long_text)
+            if ctype == "button":
+                long_action = cfg.get(f"{key}_long", "none")
+                long_label = ACTION_LABELS.get(long_action, long_action)
+                if long_action == "transport_mode":
+                    long_text = Text(long_label, style="bold red")
+                elif long_action == "none":
+                    long_text = Text(long_label, style="dim")
+                else:
+                    long_text = Text(long_label)
+            else:
+                long_text = Text("—", style="dim")
 
-    return _render_rich(t)
+            row = (cursor, Text(str(i + 1), style="dim"), icon,
+                   Text(name, style="white"), short_text, long_text)
+
+        t.add_row(*row, style=row_style)
+
+    return t
 
 
-def _rich_action_list(name: str, ctype: str, current: str, which: str) -> str:
-    """Build a rich action-selection table for either SHORT or LONG press.
+def _rich_main_menu(cfg) -> str:
+    """Backwards-compat wrapper — returns the plain (non-highlighted) main
+    menu rendered to an ANSI-containing string. Used by non-interactive tests
+    and the rich-without-arrows code path.
+    """
+    return _render_rich(_build_main_menu_table(cfg, selected=-1))
 
-    `which` is "SHORT" or "LONG" — drives the title and accent color.
+
+def _build_action_menu_table(name: str, ctype: str, current: str, which: str,
+                             selected: int = -1):
+    """Build a rich Table for action selection. If `selected >= 0`, that
+    row is highlighted. The list includes all actions plus a trailing
+    "Disabled" row; the "Disabled" row is at index len(actions).
     """
     from rich.table import Table
     from rich.text import Text
@@ -284,24 +344,169 @@ def _rich_action_list(name: str, ctype: str, current: str, which: str) -> str:
               header_style=f"bold {title_color}",
               border_style=title_color,
               expand=False)
+    t.add_column("", width=1)
     t.add_column("#", justify="right", style="dim", width=3)
     t.add_column("", width=2)
     t.add_column("Action", style="white")
-    t.add_column("", style="green")   # "← current" marker column
+    t.add_column("", style="green")
 
-    for j, (akey, alabel) in enumerate(actions, 1):
+    for j, (akey, alabel) in enumerate(actions):
+        is_sel = (j == selected)
+        cursor = Text("▸", style="bold yellow") if is_sel else Text(" ")
+        row_style = "on grey23" if is_sel else None
         icon = _ACTION_ICONS.get(akey, " ")
         label_style = "bold red" if akey == "transport_mode" else ""
         label = Text(alabel, style=label_style) if label_style else Text(alabel)
         marker = Text("← current", style="bold yellow") if current == akey else Text("")
-        t.add_row(str(j), icon, label, marker)
+        t.add_row(cursor, str(j + 1), icon, label, marker, style=row_style)
 
-    # "0. Disabled" row
+    # "Disabled" row appended at index len(actions); hotkey "0"
+    disabled_idx = len(actions)
+    is_sel = (disabled_idx == selected)
+    cursor = Text("▸", style="bold yellow") if is_sel else Text(" ")
+    row_style = "on grey23" if is_sel else None
     none_marker = Text("← current", style="bold yellow") if current == "none" else Text("")
-    t.add_row("0", _ACTION_ICONS.get("none", " "),
-              Text("Disabled", style="dim"), none_marker)
+    t.add_row(cursor, "0", _ACTION_ICONS.get("none", " "),
+              Text("Disabled", style="dim"), none_marker, style=row_style)
 
-    return _render_rich(t)
+    return t
+
+
+def _rich_action_list(name: str, ctype: str, current: str, which: str) -> str:
+    """Backwards-compat wrapper — non-highlighted action list as a string."""
+    return _render_rich(_build_action_menu_table(name, ctype, current, which, selected=-1))
+
+
+# ── Arrow-key driven menus (rich Live + readchar) ─────────────────────────────
+# The loops below call `read_key_fn()` which returns a keypress string matching
+# the _KEY_* constants. Tests pass a scripted callable; production uses
+# `readchar.readkey`.
+
+def _match_enter(key: str) -> bool:
+    return key in _KEY_ENTER_CODES
+
+
+def _arrow_pick_action(name: str, ctype: str, current: str, which: str,
+                       read_key_fn, console=None):
+    """Interactive action-selection loop. Returns the picked action string,
+    or None if the user pressed Esc (cancel).
+
+    Pre-selects the row matching `current` so arrow-up/down moves from the
+    existing binding. Typing a digit (1-N for actions, 0 for Disabled)
+    activates that row immediately. Enter activates the current row.
+    """
+    from rich.live import Live
+
+    actions = ACTIONS_FOR_TYPE[ctype]
+    n = len(actions) + 1   # +1 for "Disabled" row
+
+    # Pre-select the row matching the current binding
+    selected = len(actions) if current == "none" else 0
+    for j, (akey, _) in enumerate(actions):
+        if akey == current:
+            selected = j
+            break
+
+    def picked(idx: int):
+        return "none" if idx == len(actions) else actions[idx][0]
+
+    def render():
+        return _build_action_menu_table(name, ctype, current, which, selected)
+
+    with Live(render(), console=console, refresh_per_second=30,
+              screen=False, transient=True) as live:
+        while True:
+            key = read_key_fn()
+            if key == _KEY_UP:
+                selected = (selected - 1) % n
+            elif key == _KEY_DOWN:
+                selected = (selected + 1) % n
+            elif _match_enter(key):
+                return picked(selected)
+            elif key == _KEY_ESC:
+                return None
+            elif key == "0":
+                return "none"
+            elif key.isdigit():
+                idx = int(key) - 1
+                if 0 <= idx < len(actions):
+                    return picked(idx)
+            else:
+                continue   # unknown key — ignore, don't re-render
+            live.update(render())
+
+
+def _arrow_configure(cfg, read_key_fn=None, console=None) -> None:
+    """Interactive arrow-driven configure loop. Returns when the user saves
+    or exits. Mutates `cfg` in place as bindings change.
+    """
+    from rich.live import Live
+    if read_key_fn is None:
+        import readchar
+        read_key_fn = readchar.readkey
+
+    items = _main_menu_items()
+    n = len(items)
+    save_idx = next(i for i, it in enumerate(items) if it[0] == "__save__")
+    exit_idx = next(i for i, it in enumerate(items) if it[0] == "__exit__")
+    selected = 0
+
+    def render():
+        return _build_main_menu_table(cfg, selected)
+
+    while True:
+        activated_idx = None
+        with Live(render(), console=console, refresh_per_second=30,
+                  screen=False, transient=True) as live:
+            while True:
+                key = read_key_fn()
+                if key == _KEY_UP:
+                    selected = (selected - 1) % n
+                elif key == _KEY_DOWN:
+                    selected = (selected + 1) % n
+                elif _match_enter(key):
+                    activated_idx = selected
+                    break
+                elif key == _KEY_ESC or key == "q":
+                    activated_idx = exit_idx
+                    break
+                elif key == "s":
+                    activated_idx = save_idx
+                    break
+                elif key.isdigit() and key != "0":
+                    idx = int(key) - 1
+                    if 0 <= idx < len(CONTROLS):
+                        activated_idx = idx
+                        break
+                else:
+                    continue
+                live.update(render())
+
+        # Activation happens AFTER exiting the Live context so nested
+        # Live loops (sub-menu) don't conflict.
+        item_key, ctype, name = items[activated_idx][:3]
+        if item_key == "__save__":
+            if _save_and_restart(cfg):
+                return
+            selected = activated_idx
+            continue
+        if item_key == "__exit__":
+            return
+
+        # Regular control — open sub-menu(s)
+        short = _arrow_pick_action(name, ctype, cfg.get(item_key, "none"),
+                                   "SHORT", read_key_fn, console)
+        if short is None:
+            selected = activated_idx
+            continue
+        cfg[item_key] = short
+        if ctype == "button":
+            long_action = _arrow_pick_action(
+                name, ctype, cfg.get(f"{item_key}_long", "none"),
+                "LONG", read_key_fn, console)
+            if long_action is not None:
+                cfg[f"{item_key}_long"] = long_action
+        selected = activated_idx
 
 DEFAULT_CONFIG = {
     "left_stick":        "mouse",
@@ -419,9 +624,23 @@ def _prompt_button_binding(name: str, ctype: str, current_short: str,
 
 
 def configure_mode():
-    """Interactive CLI to rebind all Legion Go controls."""
+    """Interactive CLI to rebind all Legion Go controls.
+
+    When a TTY is attached and both rich + readchar are installed, uses
+    the arrow-key driven TUI. Otherwise falls back to line-input mode.
+    """
     cfg = load_config()
     use_rich = _try_import_rich()
+    use_arrows = (
+        use_rich
+        and _try_import_readchar()
+        and sys.stdin.isatty()
+        and sys.stdout.isatty()
+    )
+
+    if use_arrows:
+        _arrow_configure(cfg)
+        return
 
     while True:
         if use_rich:

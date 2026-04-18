@@ -38,6 +38,14 @@ else
     echo "      OK"
 fi
 
+echo "      Checking readchar (arrow-key support in --configure TUI)..."
+if ! "$PYTHON" -c "import readchar" 2>/dev/null; then
+    echo "      Installing readchar via pip..."
+    "$PYTHON" -m pip install readchar --break-system-packages
+else
+    echo "      OK"
+fi
+
 # ── 2. uinput kernel module ────────────────────────────────────────────────────
 echo "[2/4] Configuring uinput kernel module..."
 if ! lsmod | grep -q uinput; then
