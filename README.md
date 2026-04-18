@@ -156,6 +156,24 @@ Config keys in `~/.config/legion-go-mapper/config.json`:
 
 Add new entries to `notification_colors` to expand the palette. Unknown color names passed to `legion-notifier --color` are silently ignored by the mapper.
 
+### Haptic feedback (optional)
+
+Each LED flash can be accompanied by a rumble pulse on the gamepad motors. Off by default — it's invasive in game sessions. Enable it via config:
+
+```json
+"notification_haptic": {
+    "enabled": true,
+    "strong": 0.4,
+    "weak": 0.2,
+    "duration_ms": 150
+}
+```
+
+- `strong` / `weak`: motor magnitudes (0.0..1.0). `strong` is the heavy/low-frequency motor, `weak` is the light/high-frequency one
+- `duration_ms`: how long each rumble pulse lasts. Matches `on_ms` (150 ms) by default so rumble and LED flash are visually/kinetically synchronized
+
+Haptic silently disables itself if the gamepad driver doesn't advertise `FF_RUMBLE` (logged at startup).
+
 ### Binding dismiss
 
 The `notifier_dismiss` action clears all pending notifications and stops the cycle. Bind it to any unused button:

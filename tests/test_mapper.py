@@ -1199,6 +1199,80 @@ def test_notifier_dismiss_clears_pending():
     assert n.pending_count() == 0
 
 
+def test_notifier_triggers_haptic_once_per_flash():
+    leds = _NotifierLeds()
+    haptic_calls = []
+
+    class _FakeHaptic:
+        def pulse(self):
+            haptic_calls.append("pulse")
+
+    n = m.Notifier(leds, transport=None, sleep_fn=lambda s: None,
+                   on_ms=1, off_ms=1, haptic=_FakeHaptic())
+    n._process_item(((0, 255, 0), 3))
+
+    # One haptic pulse per LED flash (not per on/off pair)
+    assert haptic_calls == ["pulse", "pulse", "pulse"]
+
+
+def test_notifier_no_haptic_when_not_configured():
+    """Backward compat: omitting haptic must not break _process_item."""
+    leds = _NotifierLeds()
+    n = m.Notifier(leds, transport=None, sleep_fn=lambda s: None,
+                   on_ms=1, off_ms=1)
+    n._process_item(((0, 255, 0), 2))     # must not raise
+
+
+# ── HapticController ─────────────────────────────────────────────────────────
+
+def test_haptic_controller_no_dev_is_noop():
+    h = m.HapticController(None)
+    h.pulse()       # must not raise
+    h.close()
+
+
+def test_haptic_controller_skips_when_device_lacks_ff():
+    fake_dev = mock.MagicMock()
+    fake_dev.capabilities.return_value = {evdev.ecodes.EV_KEY: [1, 2, 3]}
+    h = m.HapticController(fake_dev)
+
+    # No upload attempted because device doesn't advertise EV_FF
+    fake_dev.upload_effect.assert_not_called()
+    # pulse() must be a no-op
+    h.pulse()
+    fake_dev.write.assert_not_called()
+
+
+def test_haptic_controller_uploads_and_pulses_when_supported(monkeypatch):
+    # Fake device advertising FF_RUMBLE
+    evdev.ecodes.EV_FF = 0x15
+    evdev.ecodes.FF_RUMBLE = 0x50
+    fake_dev = mock.MagicMock()
+    fake_dev.capabilities.return_value = {
+        evdev.ecodes.EV_FF: [evdev.ecodes.FF_RUMBLE],
+    }
+    fake_dev.upload_effect.return_value = 42
+
+    # Stub evdev.ff.Effect and friends — mapper code must not crash when
+    # assembling the effect spec.
+    monkeypatch.setattr(evdev, "ff", mock.MagicMock(), raising=False)
+
+    h = m.HapticController(fake_dev, strong=0.5, weak=0.25, duration_ms=150)
+
+    fake_dev.upload_effect.assert_called_once()
+    h.pulse()
+    fake_dev.write.assert_called_once_with(evdev.ecodes.EV_FF, 42, 1)
+
+    h.close()
+    fake_dev.erase_effect.assert_called_once_with(42)
+
+
+def test_default_config_has_haptic_disabled():
+    haptic_cfg = m.DEFAULT_CONFIG.get("notification_haptic")
+    assert isinstance(haptic_cfg, dict)
+    assert haptic_cfg.get("enabled") is False
+
+
 def test_notifier_dismiss_is_noop_when_idle():
     """Dismiss while nothing pending must not raise or alter state."""
     leds = _NotifierLeds()

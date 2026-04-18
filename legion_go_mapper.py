@@ -569,6 +569,15 @@ DEFAULT_CONFIG = {
         "yellow": [255, 180, 0],
         "white":  [255, 255, 255],
     },
+    # Optional haptic feedback on each notification flash. "strong" and "weak"
+    # are the motor magnitudes (0.0..1.0); "duration_ms" is how long each
+    # rumble pulse lasts (matches LED on_ms for natural sync).
+    "notification_haptic": {
+        "enabled": False,
+        "strong": 0.4,
+        "weak": 0.2,
+        "duration_ms": 150,
+    },
 }
 
 
@@ -961,6 +970,64 @@ class TransportMode:
                 self._leds.set_enabled()
 
 
+class HapticController:
+    """Optional rumble feedback for LED notifications.
+
+    Pre-uploads a single FF_RUMBLE effect on the gamepad device; each
+    pulse() replays it. Fails gracefully (becomes a no-op) if the device
+    doesn't support FF_RUMBLE, if upload_effect fails, or if dev is None.
+    Grabbing the device for reads does not affect FF writes on Linux.
+    """
+
+    def __init__(self, dev, *, strong: float = 0.4, weak: float = 0.2,
+                 duration_ms: int = 150):
+        self._dev = dev
+        self._effect_id = None
+        if dev is None:
+            return
+        try:
+            caps = dev.capabilities()
+        except Exception as e:
+            print(f"[haptic] cannot read device capabilities ({e}) — disabled.")
+            return
+        ff_caps = caps.get(ecodes.EV_FF, []) if hasattr(ecodes, "EV_FF") else []
+        if not hasattr(ecodes, "FF_RUMBLE") or ecodes.FF_RUMBLE not in ff_caps:
+            print("[haptic] device does not support FF_RUMBLE — disabled.")
+            return
+        try:
+            from evdev import ff
+            effect = ff.Effect(
+                ecodes.FF_RUMBLE, -1, 0,
+                ff.Trigger(0, 0),
+                ff.Replay(int(duration_ms), 0),
+                ff.EffectType(ff_rumble_effect=ff.Rumble(
+                    int(max(0.0, min(strong, 1.0)) * 0xFFFF),
+                    int(max(0.0, min(weak, 1.0)) * 0xFFFF),
+                )),
+            )
+            self._effect_id = dev.upload_effect(effect)
+        except (OSError, IOError, AttributeError) as e:
+            print(f"[haptic] upload_effect failed ({e}) — disabled.")
+            self._effect_id = None
+
+    def pulse(self) -> None:
+        if self._effect_id is None or self._dev is None:
+            return
+        try:
+            self._dev.write(ecodes.EV_FF, self._effect_id, 1)
+        except OSError:
+            pass   # device went away or lost permission — stay silent
+
+    def close(self) -> None:
+        if self._effect_id is None or self._dev is None:
+            return
+        try:
+            self._dev.erase_effect(self._effect_id)
+        except OSError:
+            pass
+        self._effect_id = None
+
+
 class Notifier:
     """Persistent LED notification cycler.
 
@@ -978,9 +1045,11 @@ class Notifier:
                  sleep_fn=time.sleep,
                  on_ms: int = 150, off_ms: int = 150,
                  pause_ms: int = 2000,
-                 max_pending: int = 5):
+                 max_pending: int = 5,
+                 haptic=None):
         self._leds = leds
         self._transport = transport
+        self._haptic = haptic
         self._sleep_fn = sleep_fn
         self._on_s = on_ms / 1000.0
         self._off_s = off_ms / 1000.0
@@ -1071,6 +1140,8 @@ class Notifier:
         rgb, count = item
         for _ in range(count):
             self._leds.flash_color(rgb)
+            if self._haptic is not None:
+                self._haptic.pulse()
             self._sleep_fn(self._on_s)
             self._leds.set_off()
             self._sleep_fn(self._off_s)
@@ -2106,7 +2177,14 @@ def main():
     )
     leds.set_enabled()           # go solid color immediately
     transport = TransportMode(leds)
-    notifier = Notifier(leds, transport)
+    haptic_cfg = cfg.get("notification_haptic") or {}
+    haptic = (HapticController(
+        dev,
+        strong=float(haptic_cfg.get("strong", 0.4)),
+        weak=float(haptic_cfg.get("weak", 0.2)),
+        duration_ms=int(haptic_cfg.get("duration_ms", 150)),
+    ) if haptic_cfg.get("enabled", False) else None)
+    notifier = Notifier(leds, transport, haptic=haptic)
     notifier.start()
     long_dispatcher = LongPressDispatcher(
         ui, transport, long_press_ms=cfg.get("long_press_ms", 500),
@@ -2167,6 +2245,8 @@ def main():
             mover.join(timeout=1)
         if locker is not None:
             locker.join(timeout=1)
+        if haptic is not None:
+            haptic.close()
         leds.set_off()
         leds.close()
         try:
