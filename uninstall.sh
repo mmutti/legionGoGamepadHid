@@ -8,7 +8,7 @@ SERVICE_FILE="$HOME/.config/systemd/user/legion-go-mapper.service"
 echo "=== Legion Go Gamepad Mapper — Uninstall ==="
 echo
 
-echo "[1/2] Stopping and disabling systemd service..."
+echo "[1/3] Stopping and disabling systemd service..."
 systemctl --user stop    legion-go-mapper.service 2>/dev/null || true
 systemctl --user disable legion-go-mapper.service 2>/dev/null || true
 if [ -f "$SERVICE_FILE" ]; then
@@ -19,7 +19,16 @@ else
     echo "      Service file not found — skipping"
 fi
 
-echo "[2/2] Removing udev rule..."
+echo "[2/3] Removing legion-notifier CLI..."
+NOTIFIER_DST="$HOME/.local/bin/legion-notifier"
+if [ -f "$NOTIFIER_DST" ]; then
+    rm "$NOTIFIER_DST"
+    echo "      Removed $NOTIFIER_DST"
+else
+    echo "      legion-notifier not found — skipping"
+fi
+
+echo "[3/3] Removing udev rule..."
 UDEV_FILE="/etc/udev/rules.d/99-legion-go-mapper.rules"
 if [ -f "$UDEV_FILE" ]; then
     sudo rm "$UDEV_FILE"

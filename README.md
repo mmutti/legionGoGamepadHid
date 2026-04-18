@@ -93,6 +93,42 @@ LED colors are configurable as `[R, G, B]` arrays (each 0–255) in the same con
 "led_color_locked":  [255,   0, 0]
 ```
 
+## LED notifications (`legion-notifier`)
+
+The mapper monitors GNOME's notification bus and flashes the stick-ring LEDs when it sees notifications carrying Legion-specific hints. A small CLI wrapper, `legion-notifier`, makes this easy to trigger from the shell.
+
+```bash
+# Flash green × 2 on success, red × 2 on failure
+long-build.sh; legion-notifier $?
+
+# Custom notification: blue × 3 flashes
+legion-notifier --color blue --count 3 "Deploy complete"
+```
+
+Queue behaviour:
+
+- Up to 5 pending notifications; extras are dropped silently
+- Each notification plays `count` quick on/off flashes, a short gap, then restores the base LED state (solid yellow when unlocked, breathing red when transport-locked)
+
+Config keys in `~/.config/legion-go-mapper/config.json`:
+
+```json
+"notifications_enabled": true,
+"notification_colors": {
+    "green":  [0, 255,   0],
+    "red":    [255, 0,   0],
+    "blue":   [0,   0, 255],
+    "yellow": [255, 180, 0],
+    "white":  [255, 255, 255]
+},
+"notify_on_all_notifications": false,
+"default_flash": {"color": "blue", "count": 1}
+```
+
+Set `"notify_on_all_notifications": true` to flash on *every* GNOME notification (Telegram, email, calendar, etc.) using the `default_flash` color/count — handy as a silent-mode visual indicator.
+
+The feature degrades silently on non-GNOME sessions or when the session bus is unreachable — a warning is printed at startup, input mapping keeps working.
+
 ## Tuning
 
 Open `legion_go_mapper.py` and adjust the constants at the top:

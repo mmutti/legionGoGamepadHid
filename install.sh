@@ -81,8 +81,21 @@ else
     echo "      $USER is already in the 'input' group — OK"
 fi
 
-# ── 4. systemd user service ────────────────────────────────────────────────────
-echo "[4/4] Installing systemd user service..."
+# ── 4. legion-notifier CLI ────────────────────────────────────────────────────
+echo "[4/5] Installing legion-notifier CLI..."
+NOTIFIER_SRC="$SCRIPT_DIR/legion-notifier"
+NOTIFIER_DST_DIR="$HOME/.local/bin"
+NOTIFIER_DST="$NOTIFIER_DST_DIR/legion-notifier"
+mkdir -p "$NOTIFIER_DST_DIR"
+install -m 0755 "$NOTIFIER_SRC" "$NOTIFIER_DST"
+echo "      Installed $NOTIFIER_DST"
+case ":$PATH:" in
+    *":$NOTIFIER_DST_DIR:"*) ;;
+    *) echo "      NOTE: $NOTIFIER_DST_DIR is not on PATH. Add it in ~/.bashrc to use 'legion-notifier' directly." ;;
+esac
+
+# ── 5. systemd user service ────────────────────────────────────────────────────
+echo "[5/5] Installing systemd user service..."
 mkdir -p "$SERVICE_DIR"
 cat > "$SERVICE_FILE" <<EOF
 [Unit]

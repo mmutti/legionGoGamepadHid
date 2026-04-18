@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# legion-notifier — flash the Legion Go stick-ring LEDs via a GNOME
+# notification. The mapper daemon monitors the session bus and reacts to
+# Notify calls carrying hints x-legion-color / x-legion-count.
+#
+# Usage:
+#   legion-notifier [EXIT_CODE]
+#     0        → green × 2 flashes  ("Command succeeded")
+#     non-zero → red   × 2 flashes  ("Command failed (exit N)")
+#
+#   legion-notifier --color NAME [--count N] [--summary TEXT] [--body TEXT]
+#     NAME must be a color defined in config (defaults: green, red, blue,
+#     yellow, white). See notification_colors in config.json.
+#
+#   legion-notifier --help
+
+set -u
+
+usage() {
+    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+color=""
+count=2
+summary=""
+body=""
+exit_code=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --color)   color="$2"; shift 2 ;;
+        --count)   count="$2"; shift 2 ;;
+        --summary) summary="$2"; shift 2 ;;
+        --body)    body="$2"; shift 2 ;;
+        --)        shift; break ;;
+        -*) echo "legion-notifier: unknown flag $1" >&2; exit 2 ;;
+        *)
+            if [[ -z "$exit_code" && "$1" =~ ^[0-9]+$ ]]; then
+                exit_code="$1"; shift
+            elif [[ -z "$summary" ]]; then
+                summary="$1"; shift
+            elif [[ -z "$body" ]]; then
+                body="$1"; shift
+            else
+                shift
+            fi
+            ;;
+    esac
+done
+
+if [[ -z "$color" ]]; then
+    [[ -z "$exit_code" ]] && exit_code=0
+    if [[ "$exit_code" -eq 0 ]]; then
+        color="green"
+        [[ -z "$summary" ]] && summary="Command succeeded"
+    else
+        color="red"
+        [[ -z "$summary" ]] && summary="Command failed (exit $exit_code)"
+    fi
+fi
+
+[[ -z "$summary" ]] && summary="legion-notifier"
+
+if ! command -v notify-send >/dev/null 2>&1; then
+    echo "legion-notifier: notify-send not found (install libnotify-bin)" >&2
+    exit 2
+fi
+
+if [[ -n "$body" ]]; then
+    notify-send --app-name="legion-notifier" \
+        --hint="string:x-legion-color:$color" \
+        --hint="int:x-legion-count:$count" \
+        "$summary" "$body"
+else
+    notify-send --app-name="legion-notifier" \
+        --hint="string:x-legion-color:$color" \
+        --hint="int:x-legion-count:$count" \
+        "$summary"
+fi
