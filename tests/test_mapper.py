@@ -763,3 +763,34 @@ def test_hid_button_edge_no_long_action_fires_instantly(monkeypatch):
         cfg=cfg, ui=ui, transport=transport, long_dispatcher=disp,
     )
     assert ui.write.called     # fired on press
+
+
+# ── config defaults ───────────────────────────────────────────────────────────
+
+def test_default_config_has_long_press_keys():
+    for btn in ["btn_y", "btn_a", "btn_x", "btn_b", "btn_lb", "btn_rb",
+                "btn_view", "btn_menu", "btn_l3", "btn_r3",
+                "legion_btn", "settings_btn",
+                "btn_y1", "btn_y2", "btn_y3", "btn_m3"]:
+        assert f"{btn}_long" in m.DEFAULT_CONFIG, f"missing {btn}_long"
+    assert m.DEFAULT_CONFIG["long_press_ms"] == 500
+    assert m.DEFAULT_CONFIG["gnome_auto_unlock"] is False
+
+
+def test_default_legion_btn_long_is_transport_mode():
+    assert m.DEFAULT_CONFIG["legion_btn_long"] == "transport_mode"
+    # All other long keys default to "none"
+    for btn in ["btn_y", "btn_a", "btn_x", "btn_b", "btn_lb", "btn_rb",
+                "btn_view", "btn_menu", "btn_l3", "btn_r3",
+                "settings_btn", "btn_y1", "btn_y2", "btn_y3", "btn_m3"]:
+        assert m.DEFAULT_CONFIG[f"{btn}_long"] == "none"
+
+
+def test_load_config_preserves_new_keys(tmp_path, monkeypatch):
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"btn_y": "key_return"}))
+    monkeypatch.setattr(m, "CONFIG_PATH", str(p))
+    cfg = m.load_config()
+    # New keys come from DEFAULT_CONFIG even for partial user configs
+    assert cfg["long_press_ms"] == 500
+    assert cfg["legion_btn_long"] == "transport_mode"
