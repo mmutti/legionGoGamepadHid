@@ -554,12 +554,12 @@ DEFAULT_CONFIG = {
     # Stick-ring LED colors as [R, G, B] (0..255 each).
     "led_color_enabled": [255, 180, 0],   # yellow when mapper is running / unlocked
     "led_color_locked":  [255,   0, 0],   # red when transport mode is locked
-    # ── Notifier: LED-flash on GNOME notifications ────────────────────────────
-    # When True, subscribes to GNOME's org.freedesktop.Notifications.Notify
-    # and reacts to notifications carrying the hints x-legion-color / x-legion-count.
+    # ── Notifier: LED-flash on D-Bus Flash() calls ────────────────────────────
+    # When True, owns the session-bus name net.legiongo.Mapper and exports
+    # Flash(color, count) — invoked by the legion-notifier CLI via gdbus.
     "notifications_enabled": True,
-    # Named palette used by the notifier. Keys are color names referenced by
-    # --hint=string:x-legion-color:NAME and by default_flash.color.
+    # Named palette used by the notifier. Keys are color names passed to
+    # legion-notifier --color NAME (and the Flash D-Bus method).
     "notification_colors": {
         "green":  [0, 255,   0],
         "red":    [255, 0,   0],
@@ -567,11 +567,6 @@ DEFAULT_CONFIG = {
         "yellow": [255, 180, 0],
         "white":  [255, 255, 255],
     },
-    # When True, every GNOME notification (not only legion-notifier ones)
-    # triggers a flash with default_flash color/count. Useful as a silent-mode
-    # visual indicator on the handheld. Off by default.
-    "notify_on_all_notifications": False,
-    "default_flash": {"color": "blue", "count": 1},
 }
 
 
@@ -1624,115 +1619,81 @@ class OrientationWatcher:
             self.state.set_orientation(str(changed[_ORIENTATION_PROP]))
 
 
-def _parse_notification_hints(hints):
-    """Extract (color_name, count) from a GNOME notification hints dict.
+def _resolve_flash(cfg, color_name, count):
+    """Look up a color name in the palette and return (rgb_tuple, int_count).
 
-    Returns (None, 1) if x-legion-color is not present. Missing / malformed
-    x-legion-count falls back to 1.
+    Returns (None, _) if the color name is unknown.
     """
-    color = None
-    count = 1
-    for k, v in hints.items():
-        try:
-            k_str = str(k)
-        except Exception:
-            continue
-        if k_str == "x-legion-color":
-            try:
-                color = str(v)
-            except Exception:
-                color = None
-        elif k_str == "x-legion-count":
-            try:
-                count = int(v)
-            except (TypeError, ValueError):
-                count = 1
-    return color, count
-
-
-def _dispatch_notification(notifier, cfg, hints):
-    """Decide whether to enqueue a flash for the given notification hints.
-
-    Returns True if something was enqueued, False otherwise. Shape:
-      - x-legion-color present & known name → enqueue with that color + count
-      - x-legion-color missing & notify_on_all_notifications → default_flash
-      - otherwise: no-op
-    """
-    color, count = _parse_notification_hints(hints)
     palette = cfg.get("notification_colors", {})
-    if color is not None:
-        rgb = palette.get(color)
-        if rgb is None:
-            return False
-        notifier.enqueue(rgb, count)
-        return True
-    if not cfg.get("notify_on_all_notifications", False):
-        return False
-    default = cfg.get("default_flash", {"color": "blue", "count": 1})
-    rgb = palette.get(default.get("color", "blue"))
+    rgb = palette.get(str(color_name))
     if rgb is None:
-        return False
+        return None, 0
     try:
-        default_count = int(default.get("count", 1))
+        clamped = int(count)
     except (TypeError, ValueError):
-        default_count = 1
-    notifier.enqueue(rgb, default_count)
-    return True
+        clamped = 1
+    return tuple(rgb), clamped
 
 
-class NotificationWatcher(threading.Thread):
-    """Subscribes to org.freedesktop.Notifications.Notify on the session bus
-    via D-Bus BecomeMonitor. Pushes matching notifications to the Notifier.
+class NotifierService(threading.Thread):
+    """Owns a session-bus name and exports a Flash(color, count) method that
+    the legion-notifier CLI calls via gdbus. Using an owned service name
+    (instead of D-Bus BecomeMonitor, which dbus-broker restricts by policy)
+    keeps this working out-of-the-box under a stock GNOME user session.
 
-    Gated by cfg['notifications_enabled']. Degrades silently (non-fatal
-    warning) if dbus, gi, the session bus, or BecomeMonitor are unavailable.
+    Gated by cfg['notifications_enabled']. Degrades silently (with a warning
+    to stdout) if dbus, gi, or the session bus are unavailable.
     """
 
-    _RULE = "interface='org.freedesktop.Notifications',member='Notify'"
+    BUS_NAME    = "net.legiongo.Mapper"
+    OBJECT_PATH = "/net/legiongo/Notifier"
+    INTERFACE   = "net.legiongo.Notifier"
 
     def __init__(self, notifier, cfg):
         super().__init__(daemon=True)
         self._notifier = notifier
         self._cfg = cfg
 
+    def _flash(self, color_name, count):
+        rgb, c = _resolve_flash(self._cfg, color_name, count)
+        if rgb is None:
+            return
+        self._notifier.enqueue(rgb, c)
+
     def run(self) -> None:
         if not self._cfg.get("notifications_enabled", True):
             return
         try:
             import dbus
+            import dbus.service
             from dbus.mainloop.glib import DBusGMainLoop
             from gi.repository import GLib
         except ImportError:
-            print("[notifier] python3-dbus or gi not available — notifier disabled.")
+            print("[notifier] python3-dbus or gi not available — service disabled.")
             return
+
+        # The dbus.service.Object subclass must be defined after dbus imports
+        # succeed. Defining it inside run() is fine — run() fires once per
+        # thread lifetime and the closure captures self._flash cleanly.
+        flash_cb = self._flash
+        iface = self.INTERFACE
+
+        class _LegionNotifierObject(dbus.service.Object):
+            @dbus.service.method(iface, in_signature="su", out_signature="")
+            def Flash(self, color, count):
+                try:
+                    flash_cb(str(color), int(count))
+                except Exception:
+                    pass  # never let a bad payload crash the mainloop
+
         try:
             DBusGMainLoop(set_as_default=True)
             bus = dbus.SessionBus()
-            monitoring = dbus.Interface(
-                bus.get_object("org.freedesktop.DBus", "/org/freedesktop/DBus"),
-                "org.freedesktop.DBus.Monitoring",
-            )
-            monitoring.BecomeMonitor([self._RULE], dbus.UInt32(0))
-            bus.add_message_filter(self._on_message)
+            bus_name = dbus.service.BusName(self.BUS_NAME, bus=bus)
+            _LegionNotifierObject(bus_name, self.OBJECT_PATH)
             GLib.MainLoop().run()
         except Exception as e:
-            print(f"[notifier] D-Bus monitor setup failed ({e}) — notifier disabled.")
-
-    def _on_message(self, _bus, msg):
-        try:
-            if msg.get_member() != "Notify":
-                return
-            if msg.get_interface() != "org.freedesktop.Notifications":
-                return
-            args = msg.get_args_list()
-            # Notify signature: (app_name, replaces_id, app_icon, summary,
-            #                     body, actions, hints, expire_timeout)
-            if len(args) < 7:
-                return
-            hints = dict(args[6])
-            _dispatch_notification(self._notifier, self._cfg, hints)
-        except Exception:
-            pass  # never let a malformed message crash the monitor
+            print(f"[notifier] D-Bus service setup failed ({e}) — service disabled.")
 
 
 class GnomeScreenSaverWatcher(threading.Thread):
@@ -2094,8 +2055,8 @@ def main():
 
     notifier = Notifier(leds, transport)
     notifier.start()
-    notification_watcher = NotificationWatcher(notifier, cfg)
-    notification_watcher.start()
+    notifier_service = NotifierService(notifier, cfg)
+    notifier_service.start()
 
     ls_keys = (StickKeys(ui, ABS_LS_X, ABS_LS_Y)
                if cfg["left_stick"] == "arrow_keys" else None)

@@ -861,8 +861,6 @@ def test_default_config_has_led_color_keys():
 
 def test_default_config_has_notifier_keys():
     assert m.DEFAULT_CONFIG["notifications_enabled"] is True
-    assert m.DEFAULT_CONFIG["notify_on_all_notifications"] is False
-    assert m.DEFAULT_CONFIG["default_flash"] == {"color": "blue", "count": 1}
     palette = m.DEFAULT_CONFIG["notification_colors"]
     assert palette["green"] == [0, 255, 0]
     assert palette["red"] == [255, 0, 0]
@@ -877,7 +875,6 @@ def test_load_config_merges_notifier_defaults(tmp_path, monkeypatch):
     cfg = m.load_config()
     assert cfg["notifications_enabled"] is True
     assert "green" in cfg["notification_colors"]
-    assert cfg["default_flash"]["count"] == 1
 
 
 def test_led_controller_uses_custom_color_enabled(monkeypatch):
@@ -1161,78 +1158,52 @@ class _RecordingNotifier:
         self.enqueued.append((tuple(rgb), count))
 
 
-def test_parse_hints_extracts_color_and_count():
-    color, count = m._parse_notification_hints(
-        {"x-legion-color": "green", "x-legion-count": 3}
-    )
-    assert color == "green"
+def test_resolve_flash_maps_known_color_to_rgb_and_count():
+    cfg = dict(m.DEFAULT_CONFIG)
+    rgb, count = m._resolve_flash(cfg, "green", 3)
+    assert rgb == (0, 255, 0)
     assert count == 3
 
 
-def test_parse_hints_without_legion_hints_returns_none():
-    color, count = m._parse_notification_hints(
-        {"urgency": 1, "category": "device.added"}
-    )
-    assert color is None
+def test_resolve_flash_returns_none_for_unknown_color():
+    cfg = dict(m.DEFAULT_CONFIG)
+    rgb, _ = m._resolve_flash(cfg, "magenta", 2)
+    assert rgb is None
+
+
+def test_resolve_flash_falls_back_to_count_1_on_bad_count():
+    cfg = dict(m.DEFAULT_CONFIG)
+    rgb, count = m._resolve_flash(cfg, "blue", "not-a-number")
+    assert rgb == (0, 0, 255)
     assert count == 1
 
 
-def test_parse_hints_malformed_count_falls_back_to_1():
-    color, count = m._parse_notification_hints(
-        {"x-legion-color": "red", "x-legion-count": "not-a-number"}
-    )
-    assert color == "red"
-    assert count == 1
-
-
-def test_dispatch_enqueues_when_color_hint_present():
-    cfg = dict(m.DEFAULT_CONFIG)
+def test_notifier_service_flash_enqueues_when_color_known():
     notifier = _RecordingNotifier()
-    enqueued = m._dispatch_notification(
-        notifier, cfg, {"x-legion-color": "green", "x-legion-count": 2}
-    )
-    assert enqueued is True
-    assert notifier.enqueued == [((0, 255, 0), 2)]
-
-
-def test_dispatch_drops_unknown_color_name():
     cfg = dict(m.DEFAULT_CONFIG)
+    svc = m.NotifierService(notifier, cfg)
+    svc._flash("red", 4)
+    assert notifier.enqueued == [((255, 0, 0), 4)]
+
+
+def test_notifier_service_flash_silently_ignores_unknown_color():
     notifier = _RecordingNotifier()
-    enqueued = m._dispatch_notification(
-        notifier, cfg, {"x-legion-color": "magenta"}
-    )
-    assert enqueued is False
+    cfg = dict(m.DEFAULT_CONFIG)
+    svc = m.NotifierService(notifier, cfg)
+    svc._flash("fuchsia", 1)
     assert notifier.enqueued == []
 
 
-def test_dispatch_skips_when_no_hints_and_notify_all_off():
-    cfg = dict(m.DEFAULT_CONFIG)
-    notifier = _RecordingNotifier()
-    enqueued = m._dispatch_notification(notifier, cfg, {"urgency": 1})
-    assert enqueued is False
-
-
-def test_dispatch_uses_default_flash_when_notify_all_on():
-    cfg = dict(m.DEFAULT_CONFIG)
-    cfg["notify_on_all_notifications"] = True
-    cfg["default_flash"] = {"color": "blue", "count": 2}
-    notifier = _RecordingNotifier()
-    enqueued = m._dispatch_notification(notifier, cfg, {"urgency": 1})
-    assert enqueued is True
-    assert notifier.enqueued == [((0, 0, 255), 2)]
-
-
-def test_notification_watcher_disabled_by_config_exits_silently(capsys):
+def test_notifier_service_disabled_by_config_exits_silently(capsys):
     cfg = dict(m.DEFAULT_CONFIG)
     cfg["notifications_enabled"] = False
-    w = m.NotificationWatcher(notifier=_RecordingNotifier(), cfg=cfg)
-    w.run()         # must return immediately without error
+    svc = m.NotifierService(notifier=_RecordingNotifier(), cfg=cfg)
+    svc.run()
     out = capsys.readouterr().out
-    # When disabled there's nothing to log — no-op.
     assert "D-Bus" not in out
 
 
-def test_notification_watcher_no_dbus_is_silent(monkeypatch, capsys):
+def test_notifier_service_no_dbus_is_silent(monkeypatch, capsys):
     import builtins
     real_import = builtins.__import__
 
@@ -1244,10 +1215,10 @@ def test_notification_watcher_no_dbus_is_silent(monkeypatch, capsys):
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
     cfg = dict(m.DEFAULT_CONFIG)
-    w = m.NotificationWatcher(notifier=_RecordingNotifier(), cfg=cfg)
-    w.run()
+    svc = m.NotifierService(notifier=_RecordingNotifier(), cfg=cfg)
+    svc.run()
     out = capsys.readouterr().out
-    assert "notifier disabled" in out.lower()
+    assert "service disabled" in out.lower()
 
 
 def test_notifier_enqueue_clamps_count():

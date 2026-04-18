@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# legion-notifier — flash the Legion Go stick-ring LEDs via a GNOME
-# notification. The mapper daemon monitors the session bus and reacts to
-# Notify calls carrying hints x-legion-color / x-legion-count.
+# legion-notifier — flash the Legion Go stick-ring LEDs by invoking the
+# mapper's D-Bus service (net.legiongo.Mapper). Also sends a GNOME
+# notification so the user gets a desktop banner in parallel.
 #
 # Usage:
 #   legion-notifier [EXIT_CODE]
@@ -12,12 +12,13 @@
 #     NAME must be a color defined in config (defaults: green, red, blue,
 #     yellow, white). See notification_colors in config.json.
 #
+#   legion-notifier --silent ...   Do not send the GNOME banner (LED only).
 #   legion-notifier --help
 
 set -u
 
 usage() {
-    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 color=""
@@ -25,6 +26,7 @@ count=2
 summary=""
 body=""
 exit_code=""
+silent=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -33,6 +35,7 @@ while [[ $# -gt 0 ]]; do
         --count)   count="$2"; shift 2 ;;
         --summary) summary="$2"; shift 2 ;;
         --body)    body="$2"; shift 2 ;;
+        --silent)  silent=1; shift ;;
         --)        shift; break ;;
         -*) echo "legion-notifier: unknown flag $1" >&2; exit 2 ;;
         *)
@@ -62,19 +65,24 @@ fi
 
 [[ -z "$summary" ]] && summary="legion-notifier"
 
-if ! command -v notify-send >/dev/null 2>&1; then
-    echo "legion-notifier: notify-send not found (install libnotify-bin)" >&2
-    exit 2
+# Flash the LEDs via the mapper's D-Bus service. Silently succeed if the
+# mapper isn't running or the service isn't registered yet — we don't want
+# notifier failures to break scripts using `cmd; legion-notifier $?`.
+if command -v gdbus >/dev/null 2>&1; then
+    gdbus call --session \
+        --dest net.legiongo.Mapper \
+        --object-path /net/legiongo/Notifier \
+        --method net.legiongo.Notifier.Flash \
+        "$color" "$count" >/dev/null 2>&1 || true
 fi
 
-if [[ -n "$body" ]]; then
-    notify-send --app-name="legion-notifier" \
-        --hint="string:x-legion-color:$color" \
-        --hint="int:x-legion-count:$count" \
-        "$summary" "$body"
-else
-    notify-send --app-name="legion-notifier" \
-        --hint="string:x-legion-color:$color" \
-        --hint="int:x-legion-count:$count" \
-        "$summary"
+if [[ "$silent" -eq 0 ]]; then
+    if ! command -v notify-send >/dev/null 2>&1; then
+        exit 0   # gdbus already flashed — silent ok
+    fi
+    if [[ -n "$body" ]]; then
+        notify-send --app-name="legion-notifier" "$summary" "$body"
+    else
+        notify-send --app-name="legion-notifier" "$summary"
+    fi
 fi

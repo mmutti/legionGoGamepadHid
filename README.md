@@ -95,14 +95,17 @@ LED colors are configurable as `[R, G, B]` arrays (each 0–255) in the same con
 
 ## LED notifications (`legion-notifier`)
 
-The mapper monitors GNOME's notification bus and flashes the stick-ring LEDs when it sees notifications carrying Legion-specific hints. A small CLI wrapper, `legion-notifier`, makes this easy to trigger from the shell.
+The mapper exposes a session-bus service (`net.legiongo.Mapper`) that flashes the stick-ring LEDs on demand. A small CLI wrapper, `legion-notifier`, calls that service via `gdbus` and also sends a GNOME desktop notification for visibility.
 
 ```bash
-# Flash green × 2 on success, red × 2 on failure
+# Flash green × 2 on success, red × 2 on failure (+ banner)
 long-build.sh; legion-notifier $?
 
 # Custom notification: blue × 3 flashes
 legion-notifier --color blue --count 3 "Deploy complete"
+
+# LED only, no desktop banner
+legion-notifier --silent --color yellow --count 5 "disk almost full"
 ```
 
 Queue behaviour:
@@ -120,12 +123,10 @@ Config keys in `~/.config/legion-go-mapper/config.json`:
     "blue":   [0,   0, 255],
     "yellow": [255, 180, 0],
     "white":  [255, 255, 255]
-},
-"notify_on_all_notifications": false,
-"default_flash": {"color": "blue", "count": 1}
+}
 ```
 
-Set `"notify_on_all_notifications": true` to flash on *every* GNOME notification (Telegram, email, calendar, etc.) using the `default_flash` color/count — handy as a silent-mode visual indicator.
+Add new entries to `notification_colors` to expand the palette. Unknown color names passed to `legion-notifier --color` are silently ignored by the mapper.
 
 The feature degrades silently on non-GNOME sessions or when the session bus is unreachable — a warning is printed at startup, input mapping keeps working.
 
