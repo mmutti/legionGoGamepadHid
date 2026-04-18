@@ -126,6 +126,7 @@ BUTTON_ACTIONS = [
     ("key_ctrl",       "Key: Ctrl (Left)"),
     ("key_c",          "Key: C"),
     ("key_d",          "Key: D"),
+    ("key_q",          "Key: Q"),
     ("key_tab",        "Key: Tab"),
 ]
 
@@ -328,6 +329,7 @@ ACTION_TO_EVKEY = {
     "key_ctrl":      ecodes.KEY_LEFTCTRL,
     "key_c":         ecodes.KEY_C,
     "key_d":         ecodes.KEY_D,
+    "key_q":         ecodes.KEY_Q,
     "key_tab":       ecodes.KEY_TAB,
 }
 
@@ -350,7 +352,7 @@ def create_virtual_device():
             ecodes.KEY_UP, ecodes.KEY_DOWN, ecodes.KEY_LEFT, ecodes.KEY_RIGHT,
             ecodes.BTN_LEFT, ecodes.BTN_RIGHT,
             ecodes.KEY_Y, ecodes.KEY_ENTER, ecodes.KEY_ESC, ecodes.KEY_BACKSPACE, ecodes.KEY_DELETE,
-            ecodes.KEY_LEFTMETA, ecodes.KEY_LEFTCTRL, ecodes.KEY_C, ecodes.KEY_D, ecodes.KEY_TAB,
+            ecodes.KEY_LEFTMETA, ecodes.KEY_LEFTCTRL, ecodes.KEY_C, ecodes.KEY_D, ecodes.KEY_Q, ecodes.KEY_TAB,
         ],
         ecodes.EV_REL: [
             ecodes.REL_X, ecodes.REL_Y,
