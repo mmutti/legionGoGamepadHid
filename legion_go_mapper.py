@@ -344,6 +344,51 @@ _EXTRA_BTN_BYTE    = 20     # byte20: bit7=Y1, bit6=Y2, bit5=Y3, bit2=M3
 _EXTRA_BTN_MASK    = 0xE4
 _HIDIOCGRAWINFO    = 0x80084803  # ioctl: get bus/VID/PID
 
+# ── Legion Go LED HID protocol (tablet variant, PIDs 0x6182-0x6185) ──────────
+# Ported from hhd-dev/hhd: src/hhd/device/legion_go/tablet/hid.py
+# Slim variant (PIDs 0x61EB-0x61EE) uses a different protocol (report 0x10)
+# — not implemented yet; LED feature degrades to a no-op on slim devices.
+
+_RGB_MODES = {"solid": 1, "pulse": 2, "dynamic": 3, "spiral": 4}
+_RGB_CONTROLLER_CODES = {"both": 0x03, "left": 0x02, "right": 0x01}
+
+
+def _rgb_controller_code(controller: str) -> int:
+    return _RGB_CONTROLLER_CODES[controller]
+
+
+def _rgb_build_set_profile(controller: str, profile: int, mode: str,
+                           r: int, g: int, b: int,
+                           brightness: float, speed: float) -> bytes:
+    """Build a Legion Go tablet RGB 'set profile' HID output report.
+
+    brightness, speed are 0.0..1.0 floats; internally scaled to 0..63.
+    Higher speed → shorter period (faster animation); speed=0.0 is slowest.
+    """
+    r_mode = _RGB_MODES[mode]
+    r_bright = min(max(int(64 * brightness), 0), 63)
+    r_period = min(max(int(64 * (1 - speed)), 0), 63)
+    r_ctrl = _rgb_controller_code(controller)
+    return bytes([
+        0x05, 0x0C, 0x72, 0x01,
+        r_ctrl, r_mode,
+        r & 0xFF, g & 0xFF, b & 0xFF,
+        r_bright, r_period,
+        profile & 0xFF, 0x01,
+    ])
+
+
+def _rgb_build_load_profile(controller: str, profile: int) -> bytes:
+    """Build a Legion Go tablet RGB 'load profile' HID output report."""
+    r_ctrl = _rgb_controller_code(controller)
+    return bytes([0x05, 0x06, 0x73, 0x02, r_ctrl, profile & 0xFF, 0x01])
+
+
+def _rgb_build_enable(controller: str, enable: bool) -> bytes:
+    """Build a Legion Go tablet RGB 'enable' HID output report."""
+    r_ctrl = _rgb_controller_code(controller)
+    return bytes([0x05, 0x06, 0x70, 0x02, r_ctrl, 1 if enable else 0, 0x01])
+
 # ── Virtual output device ──────────────────────────────────────────────────────
 
 def create_virtual_device():

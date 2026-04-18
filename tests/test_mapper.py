@@ -333,3 +333,55 @@ def test_orientation_watcher_missing_dbus_is_graceful(monkeypatch):
     except Exception as e:
         pytest.fail(f"OrientationWatcher raised unexpectedly: {e}")
     assert s.orientation == "normal"
+
+
+# ── LED protocol byte builders ────────────────────────────────────────────────
+
+def test_rgb_controller_code_both():
+    assert m._rgb_controller_code("both") == 0x03
+    assert m._rgb_controller_code("left") == 0x02
+    assert m._rgb_controller_code("right") == 0x01
+
+
+def test_rgb_build_set_profile_solid_yellow():
+    # Yellow = (255, 180, 0), solid mode, full brightness, both rings, profile 1
+    pkt = m._rgb_build_set_profile(
+        controller="both", profile=1, mode="solid",
+        r=255, g=180, b=0, brightness=1.0, speed=1.0,
+    )
+    assert pkt == bytes([
+        0x05, 0x0C, 0x72, 0x01,
+        0x03,        # controller=both
+        1,           # mode=solid
+        255, 180, 0, # RGB
+        63,          # brightness (int(64*1.0)=64 clamped to 63)
+        0,           # period (int(64*(1-1.0))=0)
+        1,           # profile
+        0x01,
+    ])
+
+
+def test_rgb_build_set_profile_pulse_red_slow():
+    # Red breathing at ~0.25 Hz (4s cycle). Speed=0.0 → period=63 (slowest).
+    pkt = m._rgb_build_set_profile(
+        controller="both", profile=1, mode="pulse",
+        r=255, g=0, b=0, brightness=1.0, speed=0.0,
+    )
+    assert pkt[5] == 2          # mode=pulse
+    assert pkt[6:9] == bytes([255, 0, 0])
+    assert pkt[10] == 63        # period=63 means slowest
+
+
+def test_rgb_build_load_profile():
+    assert m._rgb_build_load_profile(controller="both", profile=1) == bytes(
+        [0x05, 0x06, 0x73, 0x02, 0x03, 1, 0x01]
+    )
+
+
+def test_rgb_build_enable():
+    assert m._rgb_build_enable(controller="both", enable=True) == bytes(
+        [0x05, 0x06, 0x70, 0x02, 0x03, 1, 0x01]
+    )
+    assert m._rgb_build_enable(controller="both", enable=False) == bytes(
+        [0x05, 0x06, 0x70, 0x02, 0x03, 0, 0x01]
+    )
