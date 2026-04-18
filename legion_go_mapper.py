@@ -223,6 +223,7 @@ def _try_import_readchar():
 # readchar to be present at module-import time.
 _KEY_UP    = "\x1b[A"
 _KEY_DOWN  = "\x1b[B"
+_KEY_LEFT  = "\x1b[D"
 _KEY_ENTER_CODES = ("\r", "\n")
 _KEY_ESC   = "\x1b"
 
@@ -423,7 +424,7 @@ def _arrow_pick_action(name: str, ctype: str, current: str, which: str,
                 selected = (selected + 1) % n
             elif _match_enter(key):
                 return picked(selected)
-            elif key == _KEY_ESC:
+            elif key == _KEY_ESC or key == _KEY_LEFT:
                 return None
             elif key == "0":
                 return "none"
@@ -467,7 +468,7 @@ def _arrow_configure(cfg, read_key_fn=None, console=None) -> None:
                 elif _match_enter(key):
                     activated_idx = selected
                     break
-                elif key == _KEY_ESC or key == "q":
+                elif key == _KEY_ESC or key == _KEY_LEFT or key == "q":
                     activated_idx = exit_idx
                     break
                 elif key == "s":

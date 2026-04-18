@@ -947,6 +947,29 @@ def test_arrow_pick_action_esc_returns_none():
     assert out is None
 
 
+def test_arrow_pick_action_left_also_returns_none():
+    """Left arrow acts as Esc (back one level) in sub-menus."""
+    pytest.importorskip("rich")
+    keys = iter([m._KEY_LEFT])
+    out = m._arrow_pick_action(
+        name="btn_y", ctype="button",
+        current="arrow_up", which="SHORT",
+        read_key_fn=lambda: next(keys),
+    )
+    assert out is None
+
+
+def test_arrow_configure_left_exits(monkeypatch, tmp_path):
+    """Left at main menu acts as Esc → exits without saving."""
+    pytest.importorskip("rich")
+    monkeypatch.setattr(m, "CONFIG_PATH", str(tmp_path / "config.json"))
+    cfg = dict(m.DEFAULT_CONFIG)
+    cfg_before = dict(cfg)
+    m._arrow_configure(cfg, read_key_fn=lambda: m._KEY_LEFT)
+    assert cfg == cfg_before
+    assert not (tmp_path / "config.json").exists()
+
+
 def test_arrow_pick_action_digit_shortcut():
     pytest.importorskip("rich")
     actions = m.ACTIONS_FOR_TYPE["button"]
