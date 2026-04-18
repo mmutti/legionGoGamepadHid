@@ -647,3 +647,72 @@ def test_hid_dispatch_if_allowed_unrestricted_while_unlocked(monkeypatch):
     # key_y is a normal key action — should dispatch through to ui.write
     m._hid_dispatch_if_allowed("key_y", 1, ui, transport)
     assert ui.write.called
+
+
+# ── LongPressDispatcher ───────────────────────────────────────────────────────
+
+class _FakeTimer:
+    """Stand-in for threading.Timer with manual fire control."""
+    instances = []
+    def __init__(self, interval, func):
+        self.interval = interval
+        self.func = func
+        self.started = False
+        self.cancelled = False
+        _FakeTimer.instances.append(self)
+    def start(self):
+        self.started = True
+    def cancel(self):
+        self.cancelled = True
+    def fire(self):
+        if not self.cancelled:
+            self.func()
+
+
+def _new_dispatcher(monkeypatch, long_press_ms=500):
+    _FakeTimer.instances = []
+    monkeypatch.setattr(m.threading, "Timer", _FakeTimer)
+    ui = mock.MagicMock()
+    leds = _FakeLeds()
+    transport = m.TransportMode(leds)
+    return m.LongPressDispatcher(ui, transport, long_press_ms), ui, transport
+
+
+def test_longpress_no_long_action_fires_instantly(monkeypatch):
+    disp, ui, transport = _new_dispatcher(monkeypatch)
+    disp.press("btn_y", short="key_y", long_action="none")
+    # No timer started; action dispatched on the press
+    assert _FakeTimer.instances == []
+    assert ui.write.called    # key_y fires on press
+
+
+def test_longpress_with_long_action_defers_short(monkeypatch):
+    disp, ui, transport = _new_dispatcher(monkeypatch)
+    disp.press("btn_y", short="key_y", long_action="transport_mode")
+    assert len(_FakeTimer.instances) == 1
+    assert _FakeTimer.instances[0].started is True
+    # Short action NOT fired yet
+    ui.write.assert_not_called()
+
+
+def test_longpress_release_before_timeout_fires_short(monkeypatch):
+    disp, ui, transport = _new_dispatcher(monkeypatch)
+    disp.press("btn_y", short="key_y", long_action="transport_mode")
+    disp.release("btn_y")
+    # Timer cancelled; short action fired
+    assert _FakeTimer.instances[0].cancelled is True
+    # ui.write called for key_y press+release (two EV_KEY writes + syns)
+    assert ui.write.call_count >= 2
+
+
+def test_longpress_timeout_fires_long_and_suppresses_release(monkeypatch):
+    disp, ui, transport = _new_dispatcher(monkeypatch)
+    disp.press("legion_btn", short="lock_screen", long_action="transport_mode")
+    # Simulate timer firing
+    _FakeTimer.instances[0].fire()
+    # Long action fired — transport toggled
+    assert transport.locked is True
+    # Release now should NOT re-fire anything
+    prev_call_count = ui.write.call_count
+    disp.release("legion_btn")
+    assert ui.write.call_count == prev_call_count

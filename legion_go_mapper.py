@@ -490,6 +490,56 @@ class TransportMode:
                 self._locked = False
                 self._leds.set_enabled()
 
+
+class LongPressDispatcher:
+    """Per-button short-vs-long press dispatch.
+
+    If long_action == 'none': fire short on press (legacy behavior, zero latency).
+    Otherwise: start a timer on press; release-before-timeout fires short,
+    timeout-while-held fires long and marks button 'consumed' so the release
+    event does nothing.
+    """
+
+    def __init__(self, ui, transport, long_press_ms: int = 500):
+        self._ui = ui
+        self._transport = transport
+        self._timeout_s = long_press_ms / 1000.0
+        # key → {"short": str, "timer": Timer, "consumed": bool}
+        self._state: dict = {}
+
+    def press(self, key: str, short: str, long_action: str) -> None:
+        if long_action == "none" or long_action is None:
+            # legacy fast path — behaves exactly like current code
+            _dispatch_button_action(short, 1, self._ui, self._transport)
+            return
+
+        # Long-press-capable path: defer short action
+        def _fire_long():
+            _dispatch_button_action(long_action, 1, self._ui, self._transport)
+            # Fire a synthetic release for the long action (long_action was
+            # a momentary press from the user's perspective)
+            _dispatch_button_action(long_action, 0, self._ui, self._transport)
+            st = self._state.get(key)
+            if st is not None:
+                st["consumed"] = True
+
+        timer = threading.Timer(self._timeout_s, _fire_long)
+        self._state[key] = {"short": short, "timer": timer, "consumed": False}
+        timer.start()
+
+    def release(self, key: str) -> None:
+        st = self._state.pop(key, None)
+        if st is None:
+            # No deferred state — this was a long_action=="none" button; the
+            # caller handles release separately via the legacy fast path.
+            return
+        st["timer"].cancel()
+        if st["consumed"]:
+            return   # long already fired; swallow the release
+        # Early release: fire short press + release
+        _dispatch_button_action(st["short"], 1, self._ui, self._transport)
+        _dispatch_button_action(st["short"], 0, self._ui, self._transport)
+
 # ── Virtual output device ──────────────────────────────────────────────────────
 
 def create_virtual_device():
