@@ -95,10 +95,10 @@ def test_configure_quit_no_save(tmp_path, monkeypatch, capsys):
 def test_configure_save_writes_json(tmp_path, monkeypatch, capsys):
     p = tmp_path / "cfg" / "config.json"
     monkeypatch.setattr(m, "CONFIG_PATH", str(p))
-    # Pick control 4 (btn_y), choose action 11 (key_return = index 10 in BUTTON_ACTIONS),
+    # Pick control 4 (btn_y), choose action 12 (key_return = index 11 in BUTTON_ACTIONS),
     # then "0" for long-press (Disabled), then save.
     # We skip the service restart by patching subprocess.run.
-    inputs = iter(["4", "11", "0", "s"])
+    inputs = iter(["4", "12", "0", "s"])
     monkeypatch.setattr("builtins.input", lambda _="": next(inputs))
     monkeypatch.setattr(m.subprocess, "run", lambda *a, **kw: mock.MagicMock(returncode=0))
     m.configure_mode()
@@ -544,6 +544,26 @@ def test_dispatch_transport_mode_ignores_release():
     # val=0 is a release; transport_mode must not toggle on release
     m._dispatch_button_action("transport_mode", 0, ui, transport)
     assert transport.locked is False
+
+
+def test_dispatch_notifier_dismiss_calls_dismiss_on_press():
+    notifier = mock.MagicMock()
+    ui = mock.MagicMock()
+    m._dispatch_button_action("notifier_dismiss", 1, ui, transport=None, notifier=notifier)
+    notifier.dismiss.assert_called_once()
+
+
+def test_dispatch_notifier_dismiss_ignores_release():
+    notifier = mock.MagicMock()
+    ui = mock.MagicMock()
+    m._dispatch_button_action("notifier_dismiss", 0, ui, transport=None, notifier=notifier)
+    notifier.dismiss.assert_not_called()
+
+
+def test_dispatch_notifier_dismiss_without_notifier_is_noop():
+    ui = mock.MagicMock()
+    # Must not raise when notifier=None
+    m._dispatch_button_action("notifier_dismiss", 1, ui, transport=None, notifier=None)
 
 
 # ── handle_event gating ───────────────────────────────────────────────────────
@@ -1104,7 +1124,7 @@ def test_notifier_flash_and_restore_enabled_when_unlocked():
     leds = _NotifierLeds()
     sleeps = []
     n = m.Notifier(leds, transport=_NotifierTransport(locked=False),
-                   sleep_fn=sleeps.append, on_ms=10, off_ms=10, gap_ms=5)
+                   sleep_fn=sleeps.append, on_ms=10, off_ms=10)
 
     n._process_item(((0, 255, 0), 2))
 
@@ -1115,14 +1135,14 @@ def test_notifier_flash_and_restore_enabled_when_unlocked():
         ("set_off",),
         ("set_enabled",),
     ]
-    # sleeps: on, off, on, off, gap
-    assert sleeps == [0.01, 0.01, 0.01, 0.01, 0.005]
+    # sleeps: on, off, on, off  (no trailing gap in the repeat model)
+    assert sleeps == [0.01, 0.01, 0.01, 0.01]
 
 
 def test_notifier_restores_locked_state_after_flash_in_transport_mode():
     leds = _NotifierLeds()
     n = m.Notifier(leds, transport=_NotifierTransport(locked=True),
-                   sleep_fn=lambda s: None, on_ms=1, off_ms=1, gap_ms=1)
+                   sleep_fn=lambda s: None, on_ms=1, off_ms=1)
 
     n._process_item(((255, 0, 0), 1))
 
@@ -1132,22 +1152,61 @@ def test_notifier_restores_locked_state_after_flash_in_transport_mode():
 def test_notifier_restores_enabled_when_no_transport():
     leds = _NotifierLeds()
     n = m.Notifier(leds, transport=None,
-                   sleep_fn=lambda s: None, on_ms=1, off_ms=1, gap_ms=1)
+                   sleep_fn=lambda s: None, on_ms=1, off_ms=1)
 
     n._process_item(((0, 0, 255), 1))
 
     assert leds.calls[-1] == ("set_enabled",)
 
 
-def test_notifier_enqueue_drops_when_queue_is_full():
+def test_notifier_enqueue_drops_when_pending_is_full():
     leds = _NotifierLeds()
     n = m.Notifier(leds, transport=None, sleep_fn=lambda s: None,
-                   on_ms=1, off_ms=1, gap_ms=1, max_queue=5)
+                   on_ms=1, off_ms=1, max_pending=5)
 
-    for _ in range(5):
-        n.enqueue((0, 255, 0), 2)
-    n.enqueue((255, 0, 0), 2)   # 6th silently dropped
-    assert n.qsize() == 5
+    # 5 distinct notifications fill the slot
+    for i in range(5):
+        n.enqueue((i * 10, 0, 0), 2)
+    assert n.pending_count() == 5
+
+    # 6th distinct notification silently dropped
+    n.enqueue((255, 255, 255), 1)
+    assert n.pending_count() == 5
+
+
+def test_notifier_enqueue_dedupes_identical_notifications():
+    """Same (rgb, count) twice in a row should only appear once in the cycle."""
+    leds = _NotifierLeds()
+    n = m.Notifier(leds, transport=None, sleep_fn=lambda s: None,
+                   on_ms=1, off_ms=1)
+
+    n.enqueue((0, 255, 0), 2)
+    n.enqueue((0, 255, 0), 2)   # duplicate → ignored
+    n.enqueue((255, 0, 0), 2)   # different → kept
+    assert n.pending_count() == 2
+
+
+def test_notifier_dismiss_clears_pending():
+    leds = _NotifierLeds()
+    n = m.Notifier(leds, transport=None, sleep_fn=lambda s: None,
+                   on_ms=1, off_ms=1)
+
+    n.enqueue((0, 255, 0), 2)
+    n.enqueue((255, 0, 0), 2)
+    assert n.pending_count() == 2
+
+    n.dismiss()
+    assert n.pending_count() == 0
+
+
+def test_notifier_dismiss_is_noop_when_idle():
+    """Dismiss while nothing pending must not raise or alter state."""
+    leds = _NotifierLeds()
+    n = m.Notifier(leds, transport=None, sleep_fn=lambda s: None,
+                   on_ms=1, off_ms=1)
+
+    n.dismiss()   # must not raise
+    assert n.pending_count() == 0
 
 
 class _RecordingNotifier:
@@ -1224,13 +1283,12 @@ def test_notifier_service_no_dbus_is_silent(monkeypatch, capsys):
 def test_notifier_enqueue_clamps_count():
     leds = _NotifierLeds()
     n = m.Notifier(leds, transport=None, sleep_fn=lambda s: None,
-                   on_ms=1, off_ms=1, gap_ms=1)
+                   on_ms=1, off_ms=1)
 
     n.enqueue((0, 255, 0), 0)    # below min → 1
-    n.enqueue((0, 255, 0), 99)   # above max → 10
-    assert n.qsize() == 2
-    first = n._q.get_nowait()
-    second = n._q.get_nowait()
+    n.enqueue((0, 255, 0), 99)   # above max → 10 → different count, so kept
+    assert n.pending_count() == 2
+    first, second = n._pending
     assert first[1] == 1
     assert second[1] == 10
 

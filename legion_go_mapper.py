@@ -113,6 +113,7 @@ BUTTON_ACTIONS = [
     ("lock_screen",  "Lock screen"),
     ("osk",          "Toggle on-screen keyboard"),
     ("transport_mode", "Transport mode (toggle controller lock)"),
+    ("notifier_dismiss", "Dismiss pending LED notifications"),
     ("arrow_up",     "Arrow key: Up"),
     ("arrow_down",   "Arrow key: Down"),
     ("arrow_left",   "Arrow key: Left"),
@@ -195,6 +196,7 @@ _ACTION_ICONS = {
     "key_q":          "\U000f030c",
     "key_tab":        "\U000f030c",
     "transport_mode": "\uf023",      # nf-fa-lock
+    "notifier_dismiss": "\uf1f6",    # nf-fa-bell_slash
     "lock_screen":    "\uf023",
     "osk":            "\U000f0b13",  # nf-md-keyboard_outline
     "none":           "\uf05e",      # nf-fa-ban
@@ -960,13 +962,13 @@ class TransportMode:
 
 
 class Notifier:
-    """Notification LED flasher with a bounded queue.
+    """Persistent LED notification cycler.
 
-    enqueue() is non-blocking and drops silently when the queue is full, so
-    a notification storm can never back up the daemon. Each queued item is a
-    (rgb_tuple, count) pair; the worker thread plays count×(on/off) pulses,
-    a trailing gap, then restores the LEDs to the base state (solid-enabled
-    or breathing-locked, depending on transport).
+    Each distinct (rgb, count) pair is added to a pending list (max 5, deduped
+    by value). The worker thread cycles through pending items indefinitely —
+    flashing each, waiting pause_ms, then moving to the next and looping back
+    to the first — until dismiss() is called. Duplicate enqueues while already
+    pending are ignored so identical notifications never flood the cycle.
     """
 
     _COUNT_MIN = 1
@@ -974,27 +976,44 @@ class Notifier:
 
     def __init__(self, leds, transport, *,
                  sleep_fn=time.sleep,
-                 on_ms: int = 150, off_ms: int = 150, gap_ms: int = 400,
-                 max_queue: int = 5):
+                 on_ms: int = 150, off_ms: int = 150,
+                 pause_ms: int = 2000,
+                 max_pending: int = 5):
         self._leds = leds
         self._transport = transport
         self._sleep_fn = sleep_fn
         self._on_s = on_ms / 1000.0
         self._off_s = off_ms / 1000.0
-        self._gap_s = gap_ms / 1000.0
-        self._q: "queue.Queue" = queue.Queue(maxsize=max_queue)
+        self._pause_s = pause_ms / 1000.0
+        self._max_pending = max_pending
+        self._pending: list = []
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
+        self._dismiss_flag = False
         self._stop = threading.Event()
         self._thread = None
 
     def enqueue(self, rgb, count: int) -> None:
         clamped = max(self._COUNT_MIN, min(int(count), self._COUNT_MAX))
-        try:
-            self._q.put_nowait((tuple(rgb), clamped))
-        except queue.Full:
-            pass  # drop oldest-style: simply ignore new arrivals when full
+        item = (tuple(rgb), clamped)
+        with self._lock:
+            if item in self._pending:
+                return  # dedupe: same notification already scheduled
+            if len(self._pending) >= self._max_pending:
+                return  # cycle is full, drop silently
+            self._pending.append(item)
+        self._wake.set()
 
-    def qsize(self) -> int:
-        return self._q.qsize()
+    def dismiss(self) -> None:
+        """Clear the cycle and restore the base LED state."""
+        with self._lock:
+            self._pending.clear()
+            self._dismiss_flag = True
+        self._wake.set()
+
+    def pending_count(self) -> int:
+        with self._lock:
+            return len(self._pending)
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -1002,20 +1021,51 @@ class Notifier:
 
     def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            try:
-                item = self._q.get(timeout=0.25)
-            except queue.Empty:
+            with self._lock:
+                snapshot = list(self._pending)
+                if self._dismiss_flag:
+                    self._dismiss_flag = False
+                    dismissed = True
+                else:
+                    dismissed = False
+
+            if dismissed:
+                try:
+                    self._restore_base()
+                except Exception:
+                    pass
+
+            if not snapshot:
+                # Idle: wait for something to happen
+                self._wake.clear()
+                self._wake.wait(timeout=0.5)
                 continue
-            if self._stop.is_set():
-                return
-            try:
-                self._process_item(item)
-            except Exception as e:
-                # Daemon thread must never die — log and keep consuming the queue.
-                print(f"[notifier] flash sequence failed: {e}", flush=True)
+
+            for item in snapshot:
+                if self._stop.is_set():
+                    return
+                with self._lock:
+                    if self._dismiss_flag or not self._pending:
+                        break
+                try:
+                    self._process_item(item)
+                except Exception as e:
+                    print(f"[notifier] flash sequence failed: {e}", flush=True)
+
+                # 2-second pause after each burst, interruptible by dismiss /
+                # new enqueue / stop via the wake event.
+                self._wake.clear()
+                interrupted = self._wake.wait(timeout=self._pause_s)
+                if interrupted:
+                    with self._lock:
+                        if self._dismiss_flag or list(self._pending) != snapshot:
+                            # Re-snapshot next iteration so new items are picked
+                            # up immediately and dismissal is honored.
+                            break
 
     def _process_item(self, item) -> None:
         rgb, count = item
@@ -1024,7 +1074,6 @@ class Notifier:
             self._sleep_fn(self._on_s)
             self._leds.set_off()
             self._sleep_fn(self._off_s)
-        self._sleep_fn(self._gap_s)
         self._restore_base()
 
     def _restore_base(self) -> None:
@@ -1043,9 +1092,10 @@ class LongPressDispatcher:
     event does nothing.
     """
 
-    def __init__(self, ui, transport, long_press_ms: int = 500):
+    def __init__(self, ui, transport, long_press_ms: int = 500, notifier=None):
         self._ui = ui
         self._transport = transport
+        self._notifier = notifier
         self._timeout_s = long_press_ms / 1000.0
         # key → {"short": str, "timer": Timer, "consumed": bool}
         self._state: dict = {}
@@ -1053,15 +1103,15 @@ class LongPressDispatcher:
     def press(self, key: str, short: str, long_action: str) -> None:
         if long_action == "none" or long_action is None:
             # legacy fast path — behaves exactly like current code
-            _dispatch_button_action(short, 1, self._ui, self._transport)
+            _dispatch_button_action(short, 1, self._ui, self._transport, self._notifier)
             return
 
         # Long-press-capable path: defer short action
         def _fire_long():
-            _dispatch_button_action(long_action, 1, self._ui, self._transport)
+            _dispatch_button_action(long_action, 1, self._ui, self._transport, self._notifier)
             # Fire a synthetic release for the long action (long_action was
             # a momentary press from the user's perspective)
-            _dispatch_button_action(long_action, 0, self._ui, self._transport)
+            _dispatch_button_action(long_action, 0, self._ui, self._transport, self._notifier)
             st = self._state.get(key)
             if st is not None:
                 st["consumed"] = True
@@ -1080,8 +1130,8 @@ class LongPressDispatcher:
         if st["consumed"]:
             return   # long already fired; swallow the release
         # Early release: fire short press + release
-        _dispatch_button_action(st["short"], 1, self._ui, self._transport)
-        _dispatch_button_action(st["short"], 0, self._ui, self._transport)
+        _dispatch_button_action(st["short"], 1, self._ui, self._transport, self._notifier)
+        _dispatch_button_action(st["short"], 0, self._ui, self._transport, self._notifier)
 
 # ── Virtual output device ──────────────────────────────────────────────────────
 
@@ -1410,7 +1460,8 @@ def toggle_osk():
         pass
 
 
-def lock_hidraw_reader(stop_event: threading.Event, cfg: dict, ui: UInput, transport=None, long_dispatcher=None):
+def lock_hidraw_reader(stop_event: threading.Event, cfg: dict, ui: UInput,
+                        transport=None, long_dispatcher=None, notifier=None):
     """
     Watch the Legion Go HID report for special button events.
     Dispatches the configured action for each button on both press and release,
@@ -1478,7 +1529,7 @@ def lock_hidraw_reader(stop_event: threading.Event, cfg: dict, ui: UInput, trans
                     _hid_button_edge(
                         cfg_key=cfg_key, rising=rising, falling=falling,
                         cfg=cfg, ui=ui, transport=transport,
-                        long_dispatcher=long_dispatcher,
+                        long_dispatcher=long_dispatcher, notifier=notifier,
                     )
 
             prev18 = b18
@@ -1865,7 +1916,7 @@ class TriggerKey:
 
 # ── Event processing ──────────────────────────────────────────────────────────
 
-def _dispatch_button_action(action: str, val: int, ui, transport=None):
+def _dispatch_button_action(action: str, val: int, ui, transport=None, notifier=None):
     """Emit output for a digital button press (val=1) or release (val=0)."""
     if action == "mouse_left":
         ui.write(ecodes.EV_KEY, ecodes.BTN_LEFT, val)
@@ -1882,6 +1933,9 @@ def _dispatch_button_action(action: str, val: int, ui, transport=None):
     elif action == "transport_mode":
         if val == 1 and transport is not None:
             transport.toggle()
+    elif action == "notifier_dismiss":
+        if val == 1 and notifier is not None:
+            notifier.dismiss()
     elif action in ACTION_TO_EVKEY:
         ui.write(ecodes.EV_KEY, ACTION_TO_EVKEY[action], val)
         ui.syn()
@@ -1889,7 +1943,8 @@ def _dispatch_button_action(action: str, val: int, ui, transport=None):
 
 
 def _hid_button_edge(cfg_key: str, rising: bool, falling: bool, *,
-                     cfg: dict, ui, transport, long_dispatcher) -> None:
+                     cfg: dict, ui, transport, long_dispatcher,
+                     notifier=None) -> None:
     """Handle a rising/falling edge for a HID-read button, respecting
     the transport-lock gate and long-press dispatcher."""
     if not rising and not falling:
@@ -1904,7 +1959,7 @@ def _hid_button_edge(cfg_key: str, rising: bool, falling: bool, *,
             return
 
     if long_dispatcher is None or long_action == "none":
-        _dispatch_button_action(action, 1 if rising else 0, ui, transport)
+        _dispatch_button_action(action, 1 if rising else 0, ui, transport, notifier)
         return
 
     if rising:
@@ -1913,7 +1968,8 @@ def _hid_button_edge(cfg_key: str, rising: bool, falling: bool, *,
         long_dispatcher.release(cfg_key)
 
 
-def _dispatch_trigger(key: TriggerKey, value: int, action: str, ui, transport=None):
+def _dispatch_trigger(key: TriggerKey, value: int, action: str, ui,
+                      transport=None, notifier=None):
     """Update trigger press state and fire press/release when it crosses the threshold."""
     if action == "none":
         return
@@ -1921,12 +1977,12 @@ def _dispatch_trigger(key: TriggerKey, value: int, action: str, ui, transport=No
     if now_pressed == key.pressed:
         return
     key.pressed = now_pressed
-    _dispatch_button_action(action, 1 if now_pressed else 0, ui, transport)
+    _dispatch_button_action(action, 1 if now_pressed else 0, ui, transport, notifier)
 
 
 def handle_event(event, state: State, ui: UInput, dpad: DpadKeys,
                  ls_keys, rs_keys, lt_key: TriggerKey, rt_key: TriggerKey,
-                 cfg: dict, transport=None, long_dispatcher=None):
+                 cfg: dict, transport=None, long_dispatcher=None, notifier=None):
     """Process a single evdev event using the loaded config."""
     if transport is not None and transport.locked:
         return
@@ -1949,9 +2005,9 @@ def handle_event(event, state: State, ui: UInput, dpad: DpadKeys,
             if cfg.get("dpad", "none") == "arrow_keys":
                 dpad.update(code, event.value)
         elif code == ABS_LT:
-            _dispatch_trigger(lt_key, event.value, cfg.get("lt", "none"), ui, transport)
+            _dispatch_trigger(lt_key, event.value, cfg.get("lt", "none"), ui, transport, notifier)
         elif code == ABS_RT:
-            _dispatch_trigger(rt_key, event.value, cfg.get("rt", "none"), ui, transport)
+            _dispatch_trigger(rt_key, event.value, cfg.get("rt", "none"), ui, transport, notifier)
 
     elif event.type == ecodes.EV_KEY:
         cfg_key = EVCODE_TO_CONFIG_KEY.get(event.code)
@@ -1964,7 +2020,7 @@ def handle_event(event, state: State, ui: UInput, dpad: DpadKeys,
             return
         if long_dispatcher is None or long_action == "none":
             # Legacy fast path — no deferral
-            _dispatch_button_action(action, val, ui, transport)
+            _dispatch_button_action(action, val, ui, transport, notifier)
         else:
             if val == 1:
                 long_dispatcher.press(cfg_key, short=action, long_action=long_action)
@@ -2050,15 +2106,16 @@ def main():
     )
     leds.set_enabled()           # go solid color immediately
     transport = TransportMode(leds)
+    notifier = Notifier(leds, transport)
+    notifier.start()
     long_dispatcher = LongPressDispatcher(
-        ui, transport, long_press_ms=cfg.get("long_press_ms", 500)
+        ui, transport, long_press_ms=cfg.get("long_press_ms", 500),
+        notifier=notifier,
     )
 
     gnome_watcher = GnomeScreenSaverWatcher(transport, cfg)
     gnome_watcher.start()
 
-    notifier = Notifier(leds, transport)
-    notifier.start()
     notifier_service = NotifierService(notifier, cfg)
     notifier_service.start()
 
@@ -2092,7 +2149,7 @@ def main():
     if any(cfg.get(k, "none") != "none" for k in _HID_BTN_KEYS):
         locker = threading.Thread(
             target=lock_hidraw_reader,
-            args=(stop_event, cfg, ui, transport, long_dispatcher),
+            args=(stop_event, cfg, ui, transport, long_dispatcher, notifier),
             daemon=True,
         )
         locker.start()
@@ -2100,7 +2157,7 @@ def main():
     try:
         for event in dev.read_loop():
             handle_event(event, state, ui, dpad, ls_keys, rs_keys, lt_key, rt_key,
-                         cfg, transport, long_dispatcher)
+                         cfg, transport, long_dispatcher, notifier)
     except KeyboardInterrupt:
         print("\nStopping.")
     finally:

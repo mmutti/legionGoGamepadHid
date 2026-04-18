@@ -108,10 +108,12 @@ legion-notifier --color blue --count 3 "Deploy complete"
 legion-notifier --silent --color yellow --count 5 "disk almost full"
 ```
 
-Queue behaviour:
+Cycle behaviour:
 
-- Up to 5 pending notifications; extras are dropped silently
-- Each notification plays `count` quick on/off flashes, a short gap, then restores the base LED state (solid yellow when unlocked, breathing red when transport-locked)
+- Up to 5 distinct pending notifications (deduped by color+count; extras dropped silently)
+- The notifier cycles through pending items forever: flash burst → 2 s pause → next item → 2 s pause → loop to first, so you can't miss one even if you weren't looking when it arrived
+- Between bursts, LEDs return to the base state (solid yellow when unlocked, breathing red when transport-locked)
+- Cycle stops only on **dismiss** — bind it to a button via `--configure`, action name `notifier_dismiss`
 
 Config keys in `~/.config/legion-go-mapper/config.json`:
 
@@ -127,6 +129,17 @@ Config keys in `~/.config/legion-go-mapper/config.json`:
 ```
 
 Add new entries to `notification_colors` to expand the palette. Unknown color names passed to `legion-notifier --color` are silently ignored by the mapper.
+
+### Binding dismiss
+
+The `notifier_dismiss` action clears all pending notifications and stops the cycle. Bind it to any unused button:
+
+```bash
+python3 legion_go_mapper.py --configure
+# Pick a button → choose "Dismiss pending LED notifications"
+```
+
+A single short press on that button resets the cycle. Good candidates: View/Back button, an unused paddle (Y1/Y2/Y3/M3), or the Settings button short-press.
 
 The feature degrades silently on non-GNOME sessions or when the session bus is unreachable — a warning is printed at startup, input mapping keeps working.
 
