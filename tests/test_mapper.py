@@ -96,8 +96,9 @@ def test_configure_save_writes_json(tmp_path, monkeypatch, capsys):
     p = tmp_path / "cfg" / "config.json"
     monkeypatch.setattr(m, "CONFIG_PATH", str(p))
     # Pick control 4 (btn_y), choose action 11 (key_return = index 10 in BUTTON_ACTIONS),
-    # then save.  We skip the service restart by patching subprocess.run.
-    inputs = iter(["4", "11", "s"])
+    # then "0" for long-press (Disabled), then save.
+    # We skip the service restart by patching subprocess.run.
+    inputs = iter(["4", "11", "0", "s"])
     monkeypatch.setattr("builtins.input", lambda _="": next(inputs))
     monkeypatch.setattr(m.subprocess, "run", lambda *a, **kw: mock.MagicMock(returncode=0))
     m.configure_mode()
@@ -794,3 +795,22 @@ def test_load_config_preserves_new_keys(tmp_path, monkeypatch):
     # New keys come from DEFAULT_CONFIG even for partial user configs
     assert cfg["long_press_ms"] == 500
     assert cfg["legion_btn_long"] == "transport_mode"
+
+
+# ── configure_mode long-press prompt ──────────────────────────────────────────
+
+def test_configure_mode_sets_long_action(tmp_path, monkeypatch):
+    """Calling _prompt_button_binding for a discrete button returns both
+    short and long actions from scripted inputs."""
+    inputs = iter(["1", "1"])  # both prompts: pick first action
+    outputs = []
+
+    short, long_action = m._prompt_button_binding(
+        name="Y button", ctype="button",
+        current_short="arrow_up", current_long="none",
+        input_fn=lambda: next(inputs),
+        print_fn=lambda *a, **kw: outputs.append(" ".join(str(x) for x in a)),
+    )
+    expected_first = m.ACTIONS_FOR_TYPE["button"][0][0]
+    assert short == expected_first
+    assert long_action == expected_first

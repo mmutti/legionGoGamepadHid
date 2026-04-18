@@ -209,6 +209,62 @@ def save_config(cfg):
     print(f"Configuration saved to {CONFIG_PATH}")
 
 
+def _prompt_button_binding(name: str, ctype: str, current_short: str,
+                           current_long: str, input_fn=None, print_fn=None):
+    """Prompt for a button's short-press action and (if discrete-button)
+    optional long-press action. Returns (short_action, long_action)."""
+    if input_fn is None:
+        input_fn = input
+    if print_fn is None:
+        print_fn = print
+    actions = ACTIONS_FOR_TYPE[ctype]
+
+    # Short-press prompt — same shape as before
+    while True:
+        print_fn(f"\n  {name} — choose SHORT-press action:")
+        for j, (akey, alabel) in enumerate(actions, 1):
+            marker = "  ← current" if current_short == akey else ""
+            print_fn(f"  {j:3d}. {alabel}{marker}")
+        print_fn(f"    0. Disabled{('  ← current' if current_short == 'none' else '')}")
+        choice = input_fn().strip()
+        if choice == "0":
+            short_action = "none"
+            break
+        try:
+            idx = int(choice) - 1
+        except ValueError:
+            print_fn("  Invalid input.")
+            continue
+        if not (0 <= idx < len(actions)):
+            print_fn("  Invalid input.")
+            continue
+        short_action = actions[idx][0]
+        break
+
+    # Long-press prompt — only for discrete-button control type
+    if ctype != "button":
+        return short_action, "none"
+
+    while True:
+        print_fn(f"\n  {name} — choose LONG-press action (optional):")
+        for j, (akey, alabel) in enumerate(actions, 1):
+            marker = "  ← current" if current_long == akey else ""
+            print_fn(f"  {j:3d}. {alabel}{marker}")
+        print_fn(f"    0. Disabled{('  ← current' if current_long == 'none' else '')}")
+        choice = input_fn().strip()
+        if choice == "0":
+            return short_action, "none"
+        try:
+            idx = int(choice) - 1
+        except ValueError:
+            print_fn("  Invalid input.")
+            continue
+        if not (0 <= idx < len(actions)):
+            print_fn("  Invalid input.")
+            continue
+        return short_action, actions[idx][0]
+
+
 def configure_mode():
     """Interactive CLI to rebind all Legion Go controls."""
     cfg = load_config()
@@ -246,34 +302,16 @@ def configure_mode():
             continue
 
         key, ctype, name = CONTROLS[idx]
-        actions = ACTIONS_FOR_TYPE[ctype]
 
-        while True:
-            print(f"\n  {name} — choose action:")
-            for j, (akey, alabel) in enumerate(actions, 1):
-                marker = "  ← current" if cfg.get(key) == akey else ""
-                print(f"  {j:3d}. {alabel}{marker}")
-            print(f"    0. Disabled{('  ← current' if cfg.get(key) == 'none' else '')}")
-            achoice = input("\n  Enter number: ").strip()
-
-            if achoice == "0":
-                cfg[key] = "none"
-                print(f"  → {name} set to: Disabled")
-                break
-
-            try:
-                aidx = int(achoice) - 1
-            except ValueError:
-                print("  Invalid input.")
-                continue
-
-            if not (0 <= aidx < len(actions)):
-                print("  Invalid input.")
-                continue
-
-            cfg[key] = actions[aidx][0]
-            print(f"  → {name} set to: {actions[aidx][1]}")
-            break
+        short, long_action = _prompt_button_binding(
+            name=name, ctype=ctype,
+            current_short=cfg.get(key, "none"),
+            current_long=cfg.get(f"{key}_long", "none"),
+        )
+        cfg[key] = short
+        if ctype == "button":
+            cfg[f"{key}_long"] = long_action
+        print(f"  → {name} set to: short={short}, long={long_action}")
 
 
 def _save_and_restart(cfg):
