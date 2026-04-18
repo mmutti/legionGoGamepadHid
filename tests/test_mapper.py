@@ -469,3 +469,53 @@ def test_led_controller_swallows_oserror(tmp_path, monkeypatch):
     led.set_enabled()
     led.set_locked()
     led.set_off()
+
+
+# ── TransportMode ─────────────────────────────────────────────────────────────
+
+class _FakeLeds:
+    def __init__(self):
+        self.calls = []
+    def set_enabled(self): self.calls.append("enabled")
+    def set_locked(self): self.calls.append("locked")
+    def set_off(self): self.calls.append("off")
+    def close(self): self.calls.append("close")
+
+
+def test_transport_mode_starts_unlocked():
+    t = m.TransportMode(_FakeLeds())
+    assert t.locked is False
+
+
+def test_transport_toggle_locks_and_sets_red():
+    leds = _FakeLeds()
+    t = m.TransportMode(leds)
+    t.toggle()
+    assert t.locked is True
+    assert leds.calls == ["locked"]
+
+
+def test_transport_toggle_twice_unlocks_and_sets_yellow():
+    leds = _FakeLeds()
+    t = m.TransportMode(leds)
+    t.toggle()
+    t.toggle()
+    assert t.locked is False
+    assert leds.calls == ["locked", "enabled"]
+
+
+def test_transport_unlock_when_already_unlocked_is_noop():
+    leds = _FakeLeds()
+    t = m.TransportMode(leds)
+    t.unlock()
+    assert t.locked is False
+    assert leds.calls == []     # no LED write
+
+
+def test_transport_unlock_when_locked_sets_yellow():
+    leds = _FakeLeds()
+    t = m.TransportMode(leds)
+    t.toggle()      # locked
+    t.unlock()
+    assert t.locked is False
+    assert leds.calls == ["locked", "enabled"]

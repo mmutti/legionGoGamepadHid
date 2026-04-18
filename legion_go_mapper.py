@@ -451,6 +451,44 @@ class LedController:
                 pass
             self._fd = None
 
+
+class TransportMode:
+    """Tracks the mapper's 'locked / unlocked' state and drives the LEDs.
+
+    locked=True → all input dispatch paths short-circuit except the button
+    bound to 'transport_mode' (which must still reach toggle() to unlock).
+    """
+
+    def __init__(self, leds: LedController):
+        self._locked = False
+        self._leds = leds
+        self._lock = threading.Lock()
+
+    @property
+    def locked(self) -> bool:
+        return self._locked
+
+    def toggle(self) -> None:
+        with self._lock:
+            if self._locked:
+                self._locked = False
+                self._leds.set_enabled()
+            else:
+                self._locked = True
+                self._leds.set_locked()
+
+    def lock(self) -> None:
+        with self._lock:
+            if not self._locked:
+                self._locked = True
+                self._leds.set_locked()
+
+    def unlock(self) -> None:
+        with self._lock:
+            if self._locked:
+                self._locked = False
+                self._leds.set_enabled()
+
 # ── Virtual output device ──────────────────────────────────────────────────────
 
 def create_virtual_device():
