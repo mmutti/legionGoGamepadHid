@@ -1479,6 +1479,17 @@ def main():
 
     cfg = load_config()
 
+    hidraw_path = find_legion_hidraw()
+    leds = LedController(hidraw_path)
+    leds.set_enabled()           # go solid yellow immediately
+    transport = TransportMode(leds)
+    long_dispatcher = LongPressDispatcher(
+        ui, transport, long_press_ms=cfg.get("long_press_ms", 500)
+    )
+
+    gnome_watcher = GnomeScreenSaverWatcher(transport, cfg)
+    gnome_watcher.start()
+
     ls_keys = (StickKeys(ui, ABS_LS_X, ABS_LS_Y)
                if cfg["left_stick"] == "arrow_keys" else None)
     rs_keys = (StickKeys(ui, ABS_RS_X, ABS_RS_Y)
@@ -1497,7 +1508,9 @@ def main():
     stop_event = threading.Event()
 
     if cfg.get("left_stick", "none") == "mouse" or cfg.get("right_stick", "none") == "mouse":
-        mover = threading.Thread(target=mouse_mover, args=(state, ui, stop_event), daemon=True)
+        mover = threading.Thread(
+            target=mouse_mover, args=(state, ui, stop_event, transport), daemon=True
+        )
         mover.start()
     else:
         mover = None
@@ -1506,13 +1519,16 @@ def main():
     _HID_BTN_KEYS = ("legion_btn", "settings_btn", "btn_y1", "btn_y2", "btn_y3", "btn_m3")
     if any(cfg.get(k, "none") != "none" for k in _HID_BTN_KEYS):
         locker = threading.Thread(
-            target=lock_hidraw_reader, args=(stop_event, cfg, ui), daemon=True
+            target=lock_hidraw_reader,
+            args=(stop_event, cfg, ui, transport, long_dispatcher),
+            daemon=True,
         )
         locker.start()
 
     try:
         for event in dev.read_loop():
-            handle_event(event, state, ui, dpad, ls_keys, rs_keys, lt_key, rt_key, cfg)
+            handle_event(event, state, ui, dpad, ls_keys, rs_keys, lt_key, rt_key,
+                         cfg, transport, long_dispatcher)
     except KeyboardInterrupt:
         print("\nStopping.")
     finally:
@@ -1521,6 +1537,8 @@ def main():
             mover.join(timeout=1)
         if locker is not None:
             locker.join(timeout=1)
+        leds.set_off()
+        leds.close()
         try:
             dev.ungrab()
         except Exception:

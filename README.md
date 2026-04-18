@@ -73,6 +73,17 @@ When the Legion Go is held in portrait or upside-down orientation, the mouse cur
 
 If `python3-dbus` or `iio-sensor-proxy` is unavailable, a warning is printed at startup and the mapper falls back to landscape (normal) orientation.
 
+## Transport mode
+
+Disables all controller input for transport. Default binding: long-press the Legion L button (`legion_btn`) for ~500 ms to toggle. LED feedback:
+
+- Solid yellow = mapper running, controls active
+- Breathing red = transport-mode lock; all inputs ignored except the unlock button
+
+Optional: set `"gnome_auto_unlock": true` in `~/.config/legion-go-mapper/config.json` to auto-unlock when the GNOME session is unlocked.
+
+Tune the hold duration via `"long_press_ms"` (default 500). Bind `transport_mode` to any button's short or long press via `python3 legion_go_mapper.py --configure`.
+
 ## Tuning
 
 Open `legion_go_mapper.py` and adjust the constants at the top:
