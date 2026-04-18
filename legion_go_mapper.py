@@ -111,6 +111,7 @@ DPAD_ACTIONS = [
 BUTTON_ACTIONS = [
     ("lock_screen",  "Lock screen"),
     ("osk",          "Toggle on-screen keyboard"),
+    ("transport_mode", "Transport mode (toggle controller lock)"),
     ("arrow_up",     "Arrow key: Up"),
     ("arrow_down",   "Arrow key: Down"),
     ("arrow_left",   "Arrow key: Left"),
@@ -816,7 +817,7 @@ def toggle_osk():
         pass
 
 
-def lock_hidraw_reader(stop_event: threading.Event, cfg: dict, ui: UInput):
+def lock_hidraw_reader(stop_event: threading.Event, cfg: dict, ui: UInput, transport=None):
     """
     Watch the Legion Go HID report for special button events.
     Dispatches the configured action for each button on both press and release.
@@ -882,7 +883,7 @@ def lock_hidraw_reader(stop_event: threading.Event, cfg: dict, ui: UInput):
                     falling = not bool(btns & mask) and bool(prev & mask)
                     if not rising and not falling:
                         continue
-                    _dispatch_button_action(action, 1 if rising else 0, ui)
+                    _dispatch_button_action(action, 1 if rising else 0, ui, transport)
 
             prev18 = b18
             prev20 = b20
@@ -1137,7 +1138,7 @@ class TriggerKey:
 
 # ── Event processing ──────────────────────────────────────────────────────────
 
-def _dispatch_button_action(action: str, val: int, ui):
+def _dispatch_button_action(action: str, val: int, ui, transport=None):
     """Emit output for a digital button press (val=1) or release (val=0)."""
     if action == "mouse_left":
         ui.write(ecodes.EV_KEY, ecodes.BTN_LEFT, val)
@@ -1151,13 +1152,16 @@ def _dispatch_button_action(action: str, val: int, ui):
     elif action == "osk":
         if val == 1:
             toggle_osk()
+    elif action == "transport_mode":
+        if val == 1 and transport is not None:
+            transport.toggle()
     elif action in ACTION_TO_EVKEY:
         ui.write(ecodes.EV_KEY, ACTION_TO_EVKEY[action], val)
         ui.syn()
     # "none" or unknown: do nothing
 
 
-def _dispatch_trigger(key: TriggerKey, value: int, action: str, ui):
+def _dispatch_trigger(key: TriggerKey, value: int, action: str, ui, transport=None):
     """Update trigger press state and fire press/release when it crosses the threshold."""
     if action == "none":
         return
@@ -1165,12 +1169,12 @@ def _dispatch_trigger(key: TriggerKey, value: int, action: str, ui):
     if now_pressed == key.pressed:
         return
     key.pressed = now_pressed
-    _dispatch_button_action(action, 1 if now_pressed else 0, ui)
+    _dispatch_button_action(action, 1 if now_pressed else 0, ui, transport)
 
 
 def handle_event(event, state: State, ui: UInput, dpad: DpadKeys,
                  ls_keys, rs_keys, lt_key: TriggerKey, rt_key: TriggerKey,
-                 cfg: dict):
+                 cfg: dict, transport=None):
     """Process a single evdev event using the loaded config."""
 
     if event.type == ecodes.EV_ABS:
@@ -1191,9 +1195,9 @@ def handle_event(event, state: State, ui: UInput, dpad: DpadKeys,
             if cfg.get("dpad", "none") == "arrow_keys":
                 dpad.update(code, event.value)
         elif code == ABS_LT:
-            _dispatch_trigger(lt_key, event.value, cfg.get("lt", "none"), ui)
+            _dispatch_trigger(lt_key, event.value, cfg.get("lt", "none"), ui, transport)
         elif code == ABS_RT:
-            _dispatch_trigger(rt_key, event.value, cfg.get("rt", "none"), ui)
+            _dispatch_trigger(rt_key, event.value, cfg.get("rt", "none"), ui, transport)
 
     elif event.type == ecodes.EV_KEY:
         cfg_key = EVCODE_TO_CONFIG_KEY.get(event.code)
@@ -1203,7 +1207,7 @@ def handle_event(event, state: State, ui: UInput, dpad: DpadKeys,
         val    = event.value   # 0=release, 1=press, 2=repeat
         if val == 2:
             return   # ignore autorepeat
-        _dispatch_button_action(action, val, ui)
+        _dispatch_button_action(action, val, ui, transport)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

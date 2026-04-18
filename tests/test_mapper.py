@@ -95,9 +95,9 @@ def test_configure_quit_no_save(tmp_path, monkeypatch, capsys):
 def test_configure_save_writes_json(tmp_path, monkeypatch, capsys):
     p = tmp_path / "cfg" / "config.json"
     monkeypatch.setattr(m, "CONFIG_PATH", str(p))
-    # Pick control 4 (btn_y), choose action 10 (key_return = index 9 in BUTTON_ACTIONS),
+    # Pick control 4 (btn_y), choose action 11 (key_return = index 10 in BUTTON_ACTIONS),
     # then save.  We skip the service restart by patching subprocess.run.
-    inputs = iter(["4", "10", "s"])
+    inputs = iter(["4", "11", "s"])
     monkeypatch.setattr("builtins.input", lambda _="": next(inputs))
     monkeypatch.setattr(m.subprocess, "run", lambda *a, **kw: mock.MagicMock(returncode=0))
     m.configure_mode()
@@ -519,3 +519,27 @@ def test_transport_unlock_when_locked_sets_yellow():
     t.unlock()
     assert t.locked is False
     assert leds.calls == ["locked", "enabled"]
+
+
+# ── transport_mode action dispatch ────────────────────────────────────────────
+
+def test_transport_mode_action_in_button_actions():
+    action_keys = [k for k, _ in m.BUTTON_ACTIONS]
+    assert "transport_mode" in action_keys
+
+
+def test_dispatch_transport_mode_calls_toggle_on_press():
+    leds = _FakeLeds()
+    transport = m.TransportMode(leds)
+    ui = mock.MagicMock()
+    m._dispatch_button_action("transport_mode", 1, ui, transport)
+    assert transport.locked is True
+
+
+def test_dispatch_transport_mode_ignores_release():
+    leds = _FakeLeds()
+    transport = m.TransportMode(leds)
+    ui = mock.MagicMock()
+    # val=0 is a release; transport_mode must not toggle on release
+    m._dispatch_button_action("transport_mode", 0, ui, transport)
+    assert transport.locked is False
