@@ -1011,7 +1011,11 @@ class Notifier:
                 continue
             if self._stop.is_set():
                 return
-            self._process_item(item)
+            try:
+                self._process_item(item)
+            except Exception as e:
+                # Daemon thread must never die — log and keep consuming the queue.
+                print(f"[notifier] flash sequence failed: {e}", flush=True)
 
     def _process_item(self, item) -> None:
         rgb, count = item
