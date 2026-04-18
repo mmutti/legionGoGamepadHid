@@ -883,7 +883,7 @@ def lock_hidraw_reader(stop_event: threading.Event, cfg: dict, ui: UInput, trans
                     falling = not bool(btns & mask) and bool(prev & mask)
                     if not rising and not falling:
                         continue
-                    _dispatch_button_action(action, 1 if rising else 0, ui, transport)
+                    _hid_dispatch_if_allowed(action, 1 if rising else 0, ui, transport)
 
             prev18 = b18
             prev20 = b20
@@ -1171,6 +1171,17 @@ def _dispatch_button_action(action: str, val: int, ui, transport=None):
         ui.write(ecodes.EV_KEY, ACTION_TO_EVKEY[action], val)
         ui.syn()
     # "none" or unknown: do nothing
+
+
+def _hid_dispatch_if_allowed(action: str, val: int, ui, transport) -> None:
+    """Dispatch an HID-button action through the transport-mode gate.
+
+    While locked, only 'transport_mode' is permitted; all other actions
+    are suppressed so they can't leak through the lock.
+    """
+    if transport is not None and transport.locked and action != "transport_mode":
+        return
+    _dispatch_button_action(action, val, ui, transport)
 
 
 def _dispatch_trigger(key: TriggerKey, value: int, action: str, ui, transport=None):

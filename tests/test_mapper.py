@@ -613,3 +613,37 @@ def test_mouse_mover_tick_unlocked_emits_when_deflected():
 
     m._mouse_mover_tick(state, ui, transport)
     assert ui.write.called
+
+
+# ── lock_hidraw_reader selective gating ───────────────────────────────────────
+
+def test_hid_dispatch_if_allowed_passes_transport_mode_while_locked():
+    leds = _FakeLeds()
+    transport = m.TransportMode(leds)
+    transport.toggle()   # locked
+    ui = mock.MagicMock()
+
+    # transport_mode action must still fire while locked (for unlocking)
+    m._hid_dispatch_if_allowed("transport_mode", 1, ui, transport)
+    assert transport.locked is False    # toggled back to unlocked
+
+
+def test_hid_dispatch_if_allowed_suppresses_other_actions_while_locked():
+    leds = _FakeLeds()
+    transport = m.TransportMode(leds)
+    transport.toggle()   # locked
+    ui = mock.MagicMock()
+
+    m._hid_dispatch_if_allowed("lock_screen", 1, ui, transport)
+    assert transport.locked is True   # lock_screen was suppressed — transport unchanged
+    ui.write.assert_not_called()      # no uinput write happened
+
+
+def test_hid_dispatch_if_allowed_unrestricted_while_unlocked(monkeypatch):
+    leds = _FakeLeds()
+    transport = m.TransportMode(leds)  # unlocked
+    ui = mock.MagicMock()
+
+    # key_y is a normal key action — should dispatch through to ui.write
+    m._hid_dispatch_if_allowed("key_y", 1, ui, transport)
+    assert ui.write.called
