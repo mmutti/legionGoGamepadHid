@@ -1598,7 +1598,7 @@ class OrientationWatcher:
             self._read_initial()
             self._subscribe()
 
-            GLib.MainLoop().run()
+            GLib.MainLoop.new(None, False).run()
         except Exception as e:
             print(f"[orientation] D-Bus watcher failed ({e}) — orientation tracking disabled.")
 
@@ -1691,7 +1691,7 @@ class NotifierService(threading.Thread):
             bus = dbus.SessionBus()
             bus_name = dbus.service.BusName(self.BUS_NAME, bus=bus)
             _LegionNotifierObject(bus_name, self.OBJECT_PATH)
-            GLib.MainLoop().run()
+            GLib.MainLoop.new(None, False).run()
         except Exception as e:
             print(f"[notifier] D-Bus service setup failed ({e}) — service disabled.")
 
@@ -1732,7 +1732,7 @@ class GnomeScreenSaverWatcher(threading.Thread):
                 signal_name="ActiveChanged",
                 dbus_interface="org.gnome.ScreenSaver",
             )
-            GLib.MainLoop().run()
+            GLib.MainLoop.new(None, False).run()
         except Exception as e:
             print(f"[gnome-watcher] setup failed ({e}) — auto-unlock disabled.")
             return
