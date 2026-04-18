@@ -1137,6 +1137,48 @@ class OrientationWatcher:
             self.state.set_orientation(str(changed[_ORIENTATION_PROP]))
 
 
+class GnomeScreenSaverWatcher(threading.Thread):
+    """Subscribes to org.gnome.ScreenSaver.ActiveChanged on the session bus.
+
+    On active=False (session unlocked), calls transport.unlock(). On
+    active=True (session locked), does nothing — asymmetric by design.
+    Gated by cfg['gnome_auto_unlock']. Degrades silently if dbus or
+    GNOME isn't available.
+    """
+
+    def __init__(self, transport, cfg: dict):
+        super().__init__(daemon=True)
+        self._transport = transport
+        self._cfg = cfg
+
+    def _on_active_changed(self, active: bool) -> None:
+        if not active:
+            self._transport.unlock()
+
+    def run(self) -> None:
+        if not self._cfg.get("gnome_auto_unlock", False):
+            return
+        try:
+            import dbus
+            from dbus.mainloop.glib import DBusGMainLoop
+            from gi.repository import GLib
+        except ImportError:
+            print("[gnome-watcher] python3-dbus or gi not available — disabled.")
+            return
+        try:
+            DBusGMainLoop(set_as_default=True)
+            bus = dbus.SessionBus()
+            bus.add_signal_receiver(
+                self._on_active_changed,
+                signal_name="ActiveChanged",
+                dbus_interface="org.gnome.ScreenSaver",
+            )
+            GLib.MainLoop().run()
+        except Exception as e:
+            print(f"[gnome-watcher] setup failed ({e}) — auto-unlock disabled.")
+            return
+
+
 # ── Mouse mover thread ────────────────────────────────────────────────────────
 
 def _mouse_mover_tick(state: State, ui: UInput, transport, remainder_x: float = 0.0, remainder_y: float = 0.0):

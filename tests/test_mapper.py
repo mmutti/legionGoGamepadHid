@@ -814,3 +814,37 @@ def test_configure_mode_sets_long_action(tmp_path, monkeypatch):
     expected_first = m.ACTIONS_FOR_TYPE["button"][0][0]
     assert short == expected_first
     assert long_action == expected_first
+
+
+# ── GnomeScreenSaverWatcher ───────────────────────────────────────────────────
+
+def test_gnome_watcher_does_nothing_when_disabled(monkeypatch):
+    leds = _FakeLeds()
+    transport = m.TransportMode(leds)
+    cfg = {"gnome_auto_unlock": False}
+
+    w = m.GnomeScreenSaverWatcher(transport, cfg)
+    w.start()
+    w.join(timeout=0.5)
+    # thread exited without raising (no dbus access attempted)
+    assert not w.is_alive()
+
+
+def test_gnome_watcher_unlocks_on_active_false():
+    leds = _FakeLeds()
+    transport = m.TransportMode(leds)
+    transport.toggle()   # locked
+
+    # Directly invoke the handler — bypasses D-Bus setup entirely
+    w = m.GnomeScreenSaverWatcher(transport, {"gnome_auto_unlock": True})
+    w._on_active_changed(False)
+    assert transport.locked is False
+
+
+def test_gnome_watcher_ignores_active_true():
+    leds = _FakeLeds()
+    transport = m.TransportMode(leds)  # unlocked
+
+    w = m.GnomeScreenSaverWatcher(transport, {"gnome_auto_unlock": True})
+    w._on_active_changed(True)
+    assert transport.locked is False   # unchanged
