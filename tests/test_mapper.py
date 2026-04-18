@@ -543,3 +543,46 @@ def test_dispatch_transport_mode_ignores_release():
     # val=0 is a release; transport_mode must not toggle on release
     m._dispatch_button_action("transport_mode", 0, ui, transport)
     assert transport.locked is False
+
+
+# ── handle_event gating ───────────────────────────────────────────────────────
+
+def _make_locked_transport():
+    leds = _FakeLeds()
+    t = m.TransportMode(leds)
+    t.toggle()  # now locked
+    return t
+
+
+def test_handle_event_dropped_when_locked():
+    transport = _make_locked_transport()
+    ui = mock.MagicMock()
+    cfg = dict(m.DEFAULT_CONFIG)
+    ev = mock.MagicMock()
+    ev.type = evdev.ecodes.EV_KEY
+    ev.code = evdev.ecodes.BTN_Y
+    ev.value = 1
+
+    m.handle_event(ev, m.State(), ui, m.DpadKeys(ui),
+                   None, None, m.TriggerKey(), m.TriggerKey(),
+                   cfg, transport)
+
+    ui.write.assert_not_called()
+
+
+def test_handle_event_processed_when_unlocked():
+    leds = _FakeLeds()
+    transport = m.TransportMode(leds)   # unlocked
+    ui = mock.MagicMock()
+    cfg = dict(m.DEFAULT_CONFIG)
+    cfg["btn_y"] = "arrow_up"
+    ev = mock.MagicMock()
+    ev.type = evdev.ecodes.EV_KEY
+    ev.code = evdev.ecodes.BTN_Y
+    ev.value = 1
+
+    m.handle_event(ev, m.State(), ui, m.DpadKeys(ui),
+                   None, None, m.TriggerKey(), m.TriggerKey(),
+                   cfg, transport)
+
+    assert ui.write.called

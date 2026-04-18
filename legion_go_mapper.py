@@ -1176,6 +1176,8 @@ def handle_event(event, state: State, ui: UInput, dpad: DpadKeys,
                  ls_keys, rs_keys, lt_key: TriggerKey, rt_key: TriggerKey,
                  cfg: dict, transport=None):
     """Process a single evdev event using the loaded config."""
+    if transport is not None and transport.locked:
+        return
 
     if event.type == ecodes.EV_ABS:
         code = event.code
